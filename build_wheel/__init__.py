@@ -129,16 +129,8 @@ def build(git_repo):
         wf.write_files("base_dir")
         wf.write("entry_points.txt", wf.dist_info_path + "/entry_points.txt")
 
-    # 5. Auditwheel
-    wheel_rx = re.compile(r"Fixed-up wheel written to (.+)")
-    auditwheel_out = subprocess.check_output(
-        ["auditwheel", "repair", "--strip", str(wheel_path_prerepair), "-w", "dist"],
+    # 5. repair wheel
+    subprocess.check_call(
+        ["auditwheel", "repair", str(wheel_path_prerepair), "-w", "dist"],
         encoding="utf8",
-        stderr=subprocess.STDOUT,
     )
-    match = wheel_rx.search(auditwheel_out)
-    if match is None:
-        print(f"Unexpected output from auditwheel:\n{auditwheel_out}", file=sys.stderr)
-        sys.exit(1)
-
-    print(match[1])
