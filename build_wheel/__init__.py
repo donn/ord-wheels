@@ -1,0 +1,144 @@
+import gzip
+import os
+import re
+import shutil
+import subprocess
+import sys
+import sysconfig
+from pathlib import Path
+
+from wheel.wheelfile import WheelFile
+
+
+def get_mac_target():
+    interpreter_deployment_target = tuple(
+        int(v) for v in sysconfig.get_config_var("MACOSX_DEPLOYMENT_TARGET").split(".")
+    )
+    requested_deployment_target = tuple(
+        int(v) for v in os.environ.get("MACOSX_DEPLOYMENT_TARGET", "11").split(".")
+    )
+    return ".".join(max(interpreter_deployment_target, requested_deployment_target))
+
+
+def get_platform_tag():
+    PLATFORM_TAG_RAW = sysconfig.get_platform()
+    if sys.platform == "darwin":
+        target = get_mac_target() + ".0"
+        PLATFORM_TAG_RAW = re.sub(
+            r"(macosx)-\d+\.\d+", rf"\1-{target}", PLATFORM_TAG_RAW
+        )
+    # Source for these substitutions:
+    # 	https://github.com/pypa/wheel/blob/197012dcb8a9da10570d6486bc1a70305861e7f2/src/wheel/_bdist_wheel.py#L351
+    return (
+        PLATFORM_TAG_RAW.lower().replace("-", "_").replace(".", "_").replace(" ", "_")
+    )
+
+
+def build(git_repo):
+    git_repo = Path(git_repo)
+
+    # 1. Get Version
+    describe = subprocess.check_output(
+        ["git", "describe", "--long"],
+        encoding="utf8",
+        stderr=subprocess.PIPE,
+        cwd=git_repo,
+    ).strip()
+
+    tag, commit_count, _ = describe.rsplit("-", maxsplit=2)
+
+    wheel_ver = f"{tag}"
+    if int(commit_count) > 0:
+        wheel_ver += (
+            f".{commit_count}"  # not .post because we want .post for our own purposes
+        )
+    if "Q" in wheel_ver:
+        wheel_ver = wheel_ver.replace("Q", ".")
+
+    def is_canonical(version):
+        return (
+            re.match(
+                r"^([1-9][0-9]*!)?(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))*((a|b|rc)(0|[1-9][0-9]*))?(\.post(0|[1-9][0-9]*))?(\.dev(0|[1-9][0-9]*))?$",
+                version,
+            )
+            is not None
+        )
+
+    if not is_canonical(wheel_ver):
+        print(f"Generated invalid version: {wheel_ver}", file=sys.stderr)
+        sys.exit(1)
+
+    # 2. Inject Version
+    subprocess.check_call(
+        [
+            "perl",
+            "-i",
+            "-p",
+            "-e",
+            r's/distribution\s*=\s*"([A-Za-z\d\._\-]+)"/distribution = "openroad"/;',
+            "-e",
+            rf's/version\s*=\s*"([A-Za-z\d\._\-]+)"/version = "{wheel_ver}"/;',
+            "-e",
+            rf's/platform\s*=\s*"([A-Za-z\d\._\-]+)"/platform = "{get_platform_tag()}"/;',
+            str(git_repo / "python" / "openroad" / "BUILD"),
+        ]
+    )
+
+    # 3. Build wheel and binary
+    subprocess.check_call(
+        [
+            "bazel",
+            "build",
+            "//python/openroad:openroad_wheel",
+        ],
+        cwd=git_repo,
+    )
+
+    subprocess.check_call(
+        [
+            "bazel",
+            "build",
+            "//:openroad",
+        ],
+        cwd=git_repo,
+    )
+
+    # 3. Copy over wheel and binary for further processing
+    base_wheel_path = next(
+        (git_repo / "bazel-bin" / "python" / "openroad").glob("*.whl")
+    )
+
+    dist_staging_dir = Path.cwd() / "dist_staging"
+    dist_staging_dir.mkdir(parents=True, exist_ok=True)
+
+    ord_bin_dir = Path.cwd() / "base_dir" / "openroad_bin"
+
+    wheel_path_prerepair = dist_staging_dir / base_wheel_path.name
+
+    shutil.copyfile(base_wheel_path, wheel_path_prerepair)
+
+    base_bin_path = git_repo / "bazel-bin" / "openroad"
+
+    bin_path = ord_bin_dir / "openroad.gz"
+
+    with gzip.open(bin_path, "w") as f_out, open(base_bin_path, "rb") as f_in:
+        f_out.write(f_in.read())
+
+    # 4. Update wheel
+    with WheelFile(wheel_path_prerepair, "a") as wf:
+        wf.write_files("base_dir")
+        wf.write("entry_points.txt", wf.dist_info_path + "/entry_points.txt")
+
+    # 5. Auditwheel
+    wheel_rx = re.compile(r"Fixed-up wheel written to (.+)")
+    auditwheel_out = subprocess.check_output(
+        ["auditwheel", "repair", "--strip", str(wheel_path_prerepair), "-w", "dist"],
+        encoding="utf8",
+        stderr=subprocess.STDOUT,
+    )
+    match = wheel_rx.search(auditwheel_out)
+    if match is None:
+        print(f"Unexpected output from auditwheel:\n{auditwheel_out}", file=sys.stderr)
+        sys.exit(1)
+
+    print(match[1])

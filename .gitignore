@@ -1,0 +1,14 @@
+.vscode
+/*venv*
+wheelhouse/
+dist/
+dist_staging/
+__pycache__
+*.whl
+*.so
+openroad
+openroad.gz
+sandbox
+workspace
+.ruff_cache
+/build

@@ -1,0 +1,2 @@
+[console_scripts]
+openroad = openroad_bin.__main__:openroad

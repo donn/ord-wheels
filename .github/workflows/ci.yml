@@ -1,0 +1,56 @@
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build_wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [
+            {
+              name: "Ubuntu 22.04",
+              family: "linux",
+              runner: "ubuntu-22.04",
+              archs: "x86_64",
+            },
+            {
+              name: "Ubuntu 22.04",
+              family: "linux",
+              runner: "ubuntu-22.04-arm",
+              archs: "aarch64",
+            },
+            # {
+            #   name: "macOS 15",
+            #   family: "macos",
+            #   runner: "macos-15",
+            #   archs: "arm64",
+            # },
+          ]
+    name: Build Wheels | ${{ matrix.os.name }} | ${{ matrix.os.archs }}
+    runs-on: ${{ matrix.os.runner }}
+    steps:
+      - uses: bazel-contrib/setup-bazel@0.19.1
+        with:
+            bazelisk-cache: true
+            disk-cache: true
+            repository-cache: true 
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          repository: The-OpenROAD-Project/OpenROAD
+          submodules: recursive
+          ref: 26Q4
+          path: openroad-repo
+      - run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade wheel
+      - run: |
+          python3 -m build_wheel openroad-repo
+      - run: |
+          make test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-wheels-${{ matrix.os.runner }}-${{ matrix.os.archs }}
+          path: ./dist/*
