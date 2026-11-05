@@ -47,7 +47,7 @@ jobs:
       - name: Dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install --upgrade wheel auditwheel
+          python3 -m pip install --upgrade wheel auditwheel patchelf
       - name: Build
         run: |
           python3 -m build_wheel openroad-repo
