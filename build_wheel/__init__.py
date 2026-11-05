@@ -14,9 +14,7 @@ MACOSX_MINIMUM_TARGET = 15
 def get_platform_tag():
     PLATFORM_TAG_RAW = sysconfig.get_platform()
     if sys.platform == "darwin":
-        if "universal" in PLATFORM_TAG_RAW:
-            print("Script does not support universal builds of Python", file=sys.stderr)
-            sys.exit(1)
+        PLATFORM_TAG_RAW = PLATFORM_TAG_RAW.replace("universal2", "arm64")  # confuses delocate
         target = f"{MACOSX_MINIMUM_TARGET}.0"
         PLATFORM_TAG_RAW = re.sub(
             r"(macosx)-\d+\.\d+", rf"\1-{target}", PLATFORM_TAG_RAW
@@ -62,6 +60,10 @@ def build(git_repo):
         print(f"Generated invalid version: {wheel_ver}", file=sys.stderr)
         sys.exit(1)
 
+    platform = get_platform_tag()
+
+    print(f"Building {wheel_ver} for {platform}...", file=sys.stderr)
+
     # 2. Inject Version
     subprocess.check_call(
         [
@@ -73,7 +75,7 @@ def build(git_repo):
             "-e",
             rf's/version\s*=\s*"([A-Za-z\d\._\-]+)"/version = "{wheel_ver}"/;',
             "-e",
-            rf's/platform\s*=\s*"([A-Za-z\d\._\-]+)"/platform = "{get_platform_tag()}"/;',
+            rf's/platform\s*=\s*"([A-Za-z\d\._\-]+)"/platform = "{platform}"/;',
             str(git_repo / "python" / "openroad" / "BUILD"),
         ]
     )
