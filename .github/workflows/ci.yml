@@ -12,22 +12,22 @@ jobs:
               name: "Ubuntu 22.04",
               family: "linux",
               runner: "ubuntu-22.04",
-              archs: "x86_64",
+              arch: "x86_64",
             },
             {
               name: "Ubuntu 22.04",
               family: "linux",
               runner: "ubuntu-22.04-arm",
-              archs: "aarch64",
+              arch: "aarch64",
             },
-            # {
-            #   name: "macOS 15",
-            #   family: "macos",
-            #   runner: "macos-15",
-            #   archs: "arm64",
-            # },
+            {
+              name: "macOS 15",
+              family: "macos",
+              runner: "macos-15",
+              arch: "arm64",
+            },
           ]
-    name: Build Wheels | ${{ matrix.os.name }} | ${{ matrix.os.archs }}
+    name: Build Wheels | ${{ matrix.os.name }} | ${{ matrix.os.arch }}
     runs-on: ${{ matrix.os.runner }}
     steps:
       - uses: bazel-contrib/setup-bazel@0.19.1
@@ -44,18 +44,21 @@ jobs:
           submodules: recursive
           ref: 1ae778b2135fe78aad9aa02ce11638b3d553c576
           path: openroad-repo
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          architecture: ${{ matrix.os.archs }}
       - name: Dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install --upgrade wheel auditwheel patchelf
+          make venv
       - name: Build
         run: |
-          python3 -m build_wheel openroad-repo
+          ./venv/bin/python3 -m build_wheel openroad-repo
       - name: Smoke Test
         run: |
           make test
       - name: Upload Wheels
         uses: actions/upload-artifact@v7
         with:
-          name: python-wheels-${{ matrix.os.runner }}-${{ matrix.os.archs }}
+          name: openroad-python-wheels-${{ matrix.os.runner }}-${{ matrix.os.arch }}
           path: ./dist/*

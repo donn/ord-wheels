@@ -1,5 +1,11 @@
 PYTHON ?= python3
 
+.PHONY: venv
+venv:
+	$(PYTHON) -m venv venv
+	./venv/bin/python3 -m pip install --upgrade pip
+	./venv/bin/python3 -m pip install -r requirements.txt
+
 .PHONY: test
 test:
 	$(PYTHON) -m venv venv-test

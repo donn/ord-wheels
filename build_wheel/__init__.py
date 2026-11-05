@@ -1,5 +1,4 @@
 import gzip
-import os
 import re
 import shutil
 import subprocess
@@ -9,21 +8,16 @@ from pathlib import Path
 
 from wheel.wheelfile import WheelFile
 
-
-def get_mac_target():
-    interpreter_deployment_target = tuple(
-        int(v) for v in sysconfig.get_config_var("MACOSX_DEPLOYMENT_TARGET").split(".")
-    )
-    requested_deployment_target = tuple(
-        int(v) for v in os.environ.get("MACOSX_DEPLOYMENT_TARGET", "11").split(".")
-    )
-    return ".".join(max(interpreter_deployment_target, requested_deployment_target))
+MACOSX_MINIMUM_TARGET = 15
 
 
 def get_platform_tag():
     PLATFORM_TAG_RAW = sysconfig.get_platform()
     if sys.platform == "darwin":
-        target = get_mac_target() + ".0"
+        if "universal" in PLATFORM_TAG_RAW:
+            print("Script does not support universal builds of Python", file=sys.stderr)
+            sys.exit(1)
+        target = f"{MACOSX_MINIMUM_TARGET}.0"
         PLATFORM_TAG_RAW = re.sub(
             r"(macosx)-\d+\.\d+", rf"\1-{target}", PLATFORM_TAG_RAW
         )
@@ -84,11 +78,16 @@ def build(git_repo):
         ]
     )
 
+    mac_target_args = ()
+    if sys.platform == "darwin":
+        mac_target_args = ("--macos_minimum_os", str(MACOSX_MINIMUM_TARGET))
+
     # 3. Build wheel and binary
     subprocess.check_call(
         [
             "bazel",
             "build",
+            *mac_target_args,
             "//python/openroad:openroad_wheel",
         ],
         cwd=git_repo,
@@ -98,6 +97,7 @@ def build(git_repo):
         [
             "bazel",
             "build",
+            *mac_target_args,
             "//:openroad",
         ],
         cwd=git_repo,
@@ -124,13 +124,19 @@ def build(git_repo):
     with gzip.open(bin_path, "w") as f_out, open(base_bin_path, "rb") as f_in:
         f_out.write(f_in.read())
 
-    # 4. Update wheel
+    # 4. update wheel
     with WheelFile(wheel_path_prerepair, "a") as wf:
         wf.write_files("base_dir")
         wf.write("entry_points.txt", wf.dist_info_path + "/entry_points.txt")
 
-    # 5. repair wheel
-    subprocess.check_call(
-        ["auditwheel", "repair", str(wheel_path_prerepair), "-w", "dist"],
-        encoding="utf8",
-    )
+    # 5. repair/delocate wheel
+    if sys.platform == "darwin":
+        subprocess.check_call(
+            ["delocate-wheel", str(wheel_path_prerepair), "-w", "dist"],
+            encoding="utf8",
+        )
+    elif sys.platform == "linux":
+        subprocess.check_call(
+            ["auditwheel", "repair", str(wheel_path_prerepair), "-w", "dist"],
+            encoding="utf8",
+        )
