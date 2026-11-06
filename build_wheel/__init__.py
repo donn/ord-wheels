@@ -168,7 +168,7 @@ def build(git_repo):
         for line in metadata.splitlines():
             if line.strip() == "":
                 metadata_new += "License-Expression: GPLv3\n\n"
-                metadata_new += (__repo_root__ / "README.md").read_text()
+                metadata_new += (__repo_root__ / "Readme.md").read_text()
                 metadata_new += "\n"
                 break
             metadata_new += line
