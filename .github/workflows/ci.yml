@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Mohamed Gaber
+# SPDX-License-Identifier: BSD-3-Clause
 on:
   push:
   workflow_dispatch:
@@ -36,13 +38,17 @@ jobs:
             disk-cache: true
             repository-cache: true 
       - uses: actions/checkout@v7
+      - id: get_openroad_rev
+        name: Get OpenROAD revision
+        run: |
+          echo "rev=$(perl -ne 'print /rev: (.+)/' ./openroad_version.yml)" >> $GITHUB_OUTPUT
       - name: Download OpenROAD Repo
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           repository: The-OpenROAD-Project/OpenROAD
           submodules: recursive
-          ref: 1ae778b2135fe78aad9aa02ce11638b3d553c576
+          ref: ${{ get_openroad_rev.outputs.rev }}
           path: openroad-repo
       - uses: actions/setup-python@v7
         with:

@@ -1,4 +1,5 @@
 wheel
+pyyaml
 auditwheel; sys_platform == 'linux'
 patchelf; sys_platform == 'linux'
 delocate; sys_platform == 'darwin'

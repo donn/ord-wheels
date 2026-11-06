@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Mohamed Gaber
+# SPDX-License-Identifier: BSD-3-Clause
 import argparse
 
 from . import build

@@ -1,0 +1,49 @@
+From 324e2892f3c23f7d3474a0c47389b968f1c6eaf4 Mon Sep 17 00:00:00 2001
+From: shivarammysore <shivaram.mysore@gmail.com>
+Date: Tue, 3 Nov 2026 05:49:18 -0800
+Subject: [PATCH] odb: hold the lexer's comment character in an int
+
+The DEF and LEF lexers store GETC() / lefGetc() in char fc and test it
+against EOF while skipping a comment. Both functions return int.
+
+With unsigned char (aarch64 Linux) the EOF test is always false, and
+-Werror makes it a build error. With signed char a 0xFF byte in a
+comment compares equal to EOF and the lexer stops reading the file.
+
+Declare fc as int in both lexers and add a LEF test with a 0xFF byte in
+a comment.
+
+Fixes #12095
+
+Signed-off-by: shivarammysore <shivaram.mysore@gmail.com>
+---
+ src/odb/src/def/def/def_keywords.cpp |  2 +-
+ src/odb/src/lef/lef/lef_keywords.cpp |  2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/odb/src/def/def/def_keywords.cpp b/src/odb/src/def/def/def_keywords.cpp
+index 0bda0bacaee..fbd9f746277 100644
+--- a/src/odb/src/def/def/def_keywords.cpp
++++ b/src/odb/src/def/def/def_keywords.cpp
+@@ -528,7 +528,7 @@ int defrData::defyylex(YYSTYPE* pYylval)
+ 
+ int defrData::sublex(YYSTYPE* pYylval)
+ {
+-  char fc;
++  int fc;
+   double numVal;
+   char* outMsg;
+ 
+diff --git a/src/odb/src/lef/lef/lef_keywords.cpp b/src/odb/src/lef/lef/lef_keywords.cpp
+index ef34a8947ba..231edc15807 100644
+--- a/src/odb/src/lef/lef/lef_keywords.cpp
++++ b/src/odb/src/lef/lef/lef_keywords.cpp
+@@ -688,7 +688,7 @@ int yylex()
+ 
+ int lefsublex()
+ {
+-  char fc;
++  int fc;
+   char* outStr;
+ 
+   strcpy(lefData->pv_token, lefData->current_token);  // save the previous token
