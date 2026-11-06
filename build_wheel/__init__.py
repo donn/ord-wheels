@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Mohamed Gaber
 # SPDX-License-Identifier: BSD-3-Clause
 import gzip
+import os
 import re
 import shutil
 import subprocess
@@ -78,6 +79,10 @@ def build(git_repo):
 
     print(f"Building {wheel_ver} for {platform}...", file=sys.stderr)
 
+    if github_output := os.getenv("GITHUB_OUTPUT"):
+        with open(github_output, "a", encoding="utf8") as f:
+            print(f"version={wheel_ver}", file=f)
+
     # 2. Reset state and apply patches
     subprocess.check_call(
         ["git", "reset", "--hard", "HEAD"],
@@ -86,7 +91,7 @@ def build(git_repo):
         cwd=git_repo,
     )
 
-    for patch in (__repo_root__ / "patches").glob("*"):
+    for patch in sorted((__repo_root__ / "patches").glob("*")):
         subprocess.check_call(
             ["git", "apply", str(patch)],
             encoding="utf8",
@@ -167,7 +172,7 @@ def build(git_repo):
         metadata_new = ""
         for line in metadata.splitlines():
             if line.strip() == "":
-                metadata_new += "License-Expression: GPLv3\n\n"
+                metadata_new += "License-Expression: GPL-3.0-or-later\n\n"
                 metadata_new += (__repo_root__ / "Readme.md").read_text()
                 metadata_new += "\n"
                 break
