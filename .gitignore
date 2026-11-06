@@ -12,3 +12,4 @@ sandbox
 workspace
 .ruff_cache
 /build
+.DS_Store
