@@ -1,0 +1,738 @@
+From a0e89d4733ad911d543092edf2f4b84d830c22cd Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Mon, 12 Oct 2026 03:26:59 +0000
+Subject: [PATCH 13/13] python: share the per-tool wrapper library settings in
+ a macro
+
+Every tool's py_wrap repeated the same defines, visibility, alwayslink and
+common deps. python_wrap_library in bazel/python_wrap_cc.bzl holds them,
+so each tool lists only what is its own.
+
+modules_test's /proc/self/maps check is Linux-only, so it is now a separate
+test skipped elsewhere; the check that every module loads from the one
+library still runs everywhere.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ BUILD.bazel                     | 13 +++-------
+ bazel/python_wrap_cc.bzl        | 45 +++++++++++++++++++++++++++++++++
+ python/openroad/modules_test.py |  5 +++-
+ src/ant/BUILD                   |  7 ++++-
+ src/cgt/BUILD                   |  8 +++++-
+ src/cts/BUILD                   |  8 +++++-
+ src/dpl/BUILD                   |  8 +++++-
+ src/drt/BUILD                   |  8 +++++-
+ src/exa/BUILD                   |  8 +++++-
+ src/fin/BUILD                   |  8 +++++-
+ src/gpl/BUILD                   |  8 +++++-
+ src/grt/BUILD                   |  8 +++++-
+ src/ifp/BUILD                   |  8 +++++-
+ src/odb/BUILD                   | 18 +++----------
+ src/par/BUILD                   |  8 +++++-
+ src/pdn/BUILD                   |  8 +++++-
+ src/ppl/BUILD                   |  8 +++++-
+ src/psm/BUILD                   |  8 +++++-
+ src/rcx/BUILD                   |  8 +++++-
+ src/rmp/BUILD                   | 18 ++-----------
+ src/rsz/BUILD                   |  8 +++++-
+ src/stt/BUILD                   | 11 +++++++-
+ src/tap/BUILD                   |  8 +++++-
+ src/utl/BUILD                   | 25 ++++--------------
+ src/wmk/BUILD                   | 20 ++++++++++++---
+ 25 files changed, 208 insertions(+), 82 deletions(-)
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+index 99be7aaaee..f1f35fd8b1 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -8,7 +8,7 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+ load("@rules_python//python:defs.bzl", "py_library")
+ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+ load("@rules_shell//shell:sh_test.bzl", "sh_test")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_EXTENSION_LINKOPTS", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "PYTHON_EXTENSION_LINKOPTS", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -420,20 +420,15 @@ python_wrap_cc(
+     ],
+ )
+ 
+-cc_library(
++python_wrap_library(
+     name = "ord_py_wrap",
+-    srcs = [":openroad_swig-py"],
+-    local_defines = [PYTHON_STABLE_API_DEFINE],
++    local_defines = [],
++    wrapper = ":openroad_swig-py",
+     deps = [
+         ":openroad_lib",
+         ":ord",
+         "//src/ifp",
+-        "//src/odb/src/db",
+-        "//src/utl",
+-        "@boost.stacktrace",
+-        "@rules_python//python/cc:current_py_cc_headers",
+     ],
+-    alwayslink = True,
+ )
+ 
+ cc_binary(
+diff --git a/bazel/python_wrap_cc.bzl b/bazel/python_wrap_cc.bzl
+index 647b63a191..d94fd7856a 100644
+--- a/bazel/python_wrap_cc.bzl
++++ b/bazel/python_wrap_cc.bzl
+@@ -9,6 +9,7 @@ cc_library(srcs=[":python_foo"])
+ python_wrap_cc(name = "python_foo", srcs=["exception.i"],...)
+ """
+ 
++load("@rules_cc//cc:cc_library.bzl", "cc_library")
+ load(
+     "//bazel:swig_common.bzl",
+     "get_transitive_includes",
+@@ -147,3 +148,47 @@ python_wrap_cc = rule(
+         ),
+     },
+ )
++
++# Dependencies every SWIG Python wrapper needs, beyond its own tool.
++_PYTHON_WRAP_COMMON_DEPS = [
++    "//:ord",
++    "//src/odb/src/db",
++    "//src/utl",
++    "@boost.stacktrace",
++    "@rules_python//python/cc:current_py_cc_headers",
++]
++
++def python_wrap_library(
++        name,
++        srcs = [],
++        deps = [],
++        includes = [],
++        wrapper = ":swig-py",
++        local_defines = ["BAZEL=1"]):
++    """Compiles a tool's SWIG Python wrapper for linking into //:_openroad.so.
++
++    Every module's wrapper goes into that one library, so all of them share
++    one copy of the C++ state; python/modules/_openroad_loader.py loads each
++    module's init function from it.
++
++    Args:
++      name: The library name.
++      srcs: Headers the wrapper includes, beyond the tool's libraries.
++      deps: The tool's own libraries; the common dependencies are added.
++      includes: Include directories the wrapper needs, relative to the package.
++      wrapper: The python_wrap_cc target to compile.
++      local_defines: Defines for compiling the wrapper.
++    """
++    cc_library(
++        name = name,
++        srcs = srcs + [wrapper],
++        includes = includes,
++        local_defines = local_defines + [PYTHON_STABLE_API_DEFINE],
++        visibility = ["//:__pkg__"],
++        # A tool's own deps may name a common dep relative to its package.
++        deps = {
++            str(native.package_relative_label(dep)): None
++            for dep in deps + _PYTHON_WRAP_COMMON_DEPS
++        }.keys(),
++        alwayslink = True,
++    )
+diff --git a/python/openroad/modules_test.py b/python/openroad/modules_test.py
+index 6b99b9679e..25750b71ef 100644
+--- a/python/openroad/modules_test.py
++++ b/python/openroad/modules_test.py
+@@ -21,7 +21,7 @@ TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "src", "ant", "te
+ 
+ 
+ class ModulesTest(unittest.TestCase):
+-    def test_one_library_mapped_once(self):
++    def test_every_module_loads_from_one_library(self):
+         extensions = [
+             module
+             for name, module in list(sys.modules.items())
+@@ -31,6 +31,9 @@ class ModulesTest(unittest.TestCase):
+         self.assertEqual(
+             {module.__file__ for module in extensions}, {_openroad_loader.LIBRARY}
+         )
++
++    @unittest.skipUnless(sys.platform.startswith("linux"), "reads /proc/self/maps")
++    def test_library_mapped_once(self):
+         with open("/proc/self/maps") as maps:
+             libraries = {
+                 os.path.basename(line.split()[-1])
+diff --git a/src/ant/BUILD b/src/ant/BUILD
+index 7111aef708..afcfc80248 100644
+--- a/src/ant/BUILD
++++ b/src/ant/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -119,3 +119,8 @@ messages_txt(
+         "//src/ant/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    deps = [":ant"],
++)
+diff --git a/src/cgt/BUILD b/src/cgt/BUILD
+index 205c7897f0..8de3ec2152 100644
+--- a/src/cgt/BUILD
++++ b/src/cgt/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -92,3 +92,9 @@ exports_files(["README.md"])
+ messages_txt(
+     visibility = ["//docs:__pkg__"],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":cgt"],
++)
+diff --git a/src/cts/BUILD b/src/cts/BUILD
+index eecc7948b5..d991b13d80 100644
+--- a/src/cts/BUILD
++++ b/src/cts/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -155,3 +155,9 @@ messages_txt(
+         "//src/cts/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":cts"],
++)
+diff --git a/src/dpl/BUILD b/src/dpl/BUILD
+index 100e349bcc..9751abbff1 100644
+--- a/src/dpl/BUILD
++++ b/src/dpl/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -209,3 +209,9 @@ messages_txt(
+         "//src/dpl/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":dpl"],
++)
+diff --git a/src/drt/BUILD b/src/drt/BUILD
+index 4f178c943c..ab4edd0823 100644
+--- a/src/drt/BUILD
++++ b/src/drt/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -330,3 +330,9 @@ messages_txt(
+         "//src/drt/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":drt"],
++)
+diff --git a/src/exa/BUILD b/src/exa/BUILD
+index d193bb77f4..c00a9d86ce 100644
+--- a/src/exa/BUILD
++++ b/src/exa/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -122,3 +122,9 @@ exports_files(["README.md"])
+ messages_txt(
+     visibility = ["//docs:__pkg__"],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":exa"],
++)
+diff --git a/src/fin/BUILD b/src/fin/BUILD
+index 064c14384a..55a87e3c09 100644
+--- a/src/fin/BUILD
++++ b/src/fin/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -103,3 +103,9 @@ messages_txt(
+         "//src/fin/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":fin"],
++)
+diff --git a/src/gpl/BUILD b/src/gpl/BUILD
+index cd50a7ec53..7676600e67 100644
+--- a/src/gpl/BUILD
++++ b/src/gpl/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//bazel/gpu:copts.bzl", "CUDA_COPTS")
+@@ -301,3 +301,9 @@ messages_txt(
+         "//src/gpl/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":gpl"],
++)
+diff --git a/src/grt/BUILD b/src/grt/BUILD
+index fec4f72028..6519f22c33 100644
+--- a/src/grt/BUILD
++++ b/src/grt/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -321,3 +321,9 @@ messages_txt(
+         "//src/grt/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":grt"],
++)
+diff --git a/src/ifp/BUILD b/src/ifp/BUILD
+index def2b8dd9d..4a51366e0a 100644
+--- a/src/ifp/BUILD
++++ b/src/ifp/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -116,3 +116,9 @@ messages_txt(
+         "//src/ifp/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":ifp"],
++)
+diff --git a/src/odb/BUILD b/src/odb/BUILD
+index 436224f0f8..0edfe1e726 100644
+--- a/src/odb/BUILD
++++ b/src/odb/BUILD
+@@ -1,8 +1,7 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025-2025, Precision Innovations Inc.
+ 
+-load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//test:regression.bzl", "messages_txt")
+ 
+ package(
+@@ -115,18 +114,9 @@ messages_txt(
+     ],
+ )
+ 
+-# Compiled into //:_openroad.so, the one library every OpenROAD Python
+-# module is loaded from.
+-cc_library(
++python_wrap_library(
+     name = "py_wrap",
+-    srcs = [":swig-py"],
+     includes = ["src/swig/common"],
+-    local_defines = [PYTHON_STABLE_API_DEFINE],
+-    visibility = ["//:__pkg__"],
+-    deps = [
+-        "//src/odb/src/db",
+-        "//src/odb/src/swig:swig_common",
+-        "@rules_python//python/cc:current_py_cc_headers",
+-    ],
+-    alwayslink = True,
++    local_defines = [],
++    deps = ["//src/odb/src/swig:swig_common"],
+ )
+diff --git a/src/par/BUILD b/src/par/BUILD
+index 8018c424b5..41dfa981d3 100644
+--- a/src/par/BUILD
++++ b/src/par/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -147,3 +147,9 @@ messages_txt(
+         "//src/par/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":par"],
++)
+diff --git a/src/pdn/BUILD b/src/pdn/BUILD
+index 5f34435126..a5fe187591 100644
+--- a/src/pdn/BUILD
++++ b/src/pdn/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -129,3 +129,9 @@ messages_txt(
+         "//src/pdn/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":pdn"],
++)
+diff --git a/src/ppl/BUILD b/src/ppl/BUILD
+index 24e1ec5ef0..255cbda155 100644
+--- a/src/ppl/BUILD
++++ b/src/ppl/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -129,3 +129,9 @@ messages_txt(
+         "//src/ppl/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":ppl"],
++)
+diff --git a/src/psm/BUILD b/src/psm/BUILD
+index b4057c7f4c..e478be3e3c 100644
+--- a/src/psm/BUILD
++++ b/src/psm/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -122,3 +122,9 @@ messages_txt(
+         "//src/psm/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":psm"],
++)
+diff --git a/src/rcx/BUILD b/src/rcx/BUILD
+index 78f03d501c..bbb1c298ef 100644
+--- a/src/rcx/BUILD
++++ b/src/rcx/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -193,3 +193,9 @@ messages_txt(
+         "//src/rcx/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":rcx"],
++)
+diff --git a/src/rmp/BUILD b/src/rmp/BUILD
+index c7d529cc24..b970dbc64c 100644
+--- a/src/rmp/BUILD
++++ b/src/rmp/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025-2026, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -194,27 +194,13 @@ messages_txt(
+     ],
+ )
+ 
+-# Compiled into //:_openroad.so, the one library every OpenROAD Python
+-# module is loaded from.
+-cc_library(
++python_wrap_library(
+     name = "py_wrap",
+-    srcs = [":swig-py"],
+     includes = ["src"],
+-    local_defines = [
+-        "BAZEL=1",
+-        PYTHON_STABLE_API_DEFINE,
+-    ],
+-    visibility = ["//:__pkg__"],
+     deps = [
+         ":rmp",
+-        "//:ord",
+         "//src/cut",
+         "//src/dbSta",
+-        "//src/odb/src/db",
+         "//src/sta:opensta_lib",
+-        "//src/utl",
+-        "@boost.stacktrace",
+-        "@rules_python//python/cc:current_py_cc_headers",
+     ],
+-    alwayslink = True,
+ )
+diff --git a/src/rsz/BUILD b/src/rsz/BUILD
+index 957d167f0e..4698fb9474 100644
+--- a/src/rsz/BUILD
++++ b/src/rsz/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -285,3 +285,9 @@ messages_txt(
+         "//src/rsz/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":rsz"],
++)
+diff --git a/src/stt/BUILD b/src/stt/BUILD
+index c4c043025a..8a27c20d26 100644
+--- a/src/stt/BUILD
++++ b/src/stt/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -144,3 +144,12 @@ messages_txt(
+         "//src/stt/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [
++        ":stt",
++        "//src/web:core",
++    ],
++)
+diff --git a/src/tap/BUILD b/src/tap/BUILD
+index ffb9539951..4e617dd73a 100644
+--- a/src/tap/BUILD
++++ b/src/tap/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -110,3 +110,9 @@ messages_txt(
+         "//src/tap/test:__pkg__",
+     ],
+ )
++
++python_wrap_library(
++    name = "py_wrap",
++    includes = ["src"],
++    deps = [":tap"],
++)
+diff --git a/src/utl/BUILD b/src/utl/BUILD
+index 8321ae5ebb..809973f483 100644
+--- a/src/utl/BUILD
++++ b/src/utl/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -189,25 +189,10 @@ messages_txt(
+     ],
+ )
+ 
+-# Compiled into //:_openroad.so, the one library every OpenROAD Python
+-# module is loaded from.
+-cc_library(
++# LoggerCommon.cpp comes with the Tcl bindings that ord links.
++python_wrap_library(
+     name = "py_wrap",
+-    # LoggerCommon.cpp comes with the Tcl bindings that ord links.
+-    srcs = [
+-        "src/LoggerCommon.h",
+-        ":swig-py",
+-    ],
++    srcs = ["src/LoggerCommon.h"],
+     includes = ["src"],
+-    local_defines = [
+-        "BAZEL=1",
+-        PYTHON_STABLE_API_DEFINE,
+-    ],
+-    visibility = ["//:__pkg__"],
+-    deps = [
+-        ":utl",
+-        "@boost.stacktrace",
+-        "@rules_python//python/cc:current_py_cc_headers",
+-    ],
+-    alwayslink = True,
++    deps = [":utl"],
+ )
+diff --git a/src/wmk/BUILD b/src/wmk/BUILD
+index aa67ab38f7..dcbafa8b39 100644
+--- a/src/wmk/BUILD
++++ b/src/wmk/BUILD
+@@ -2,7 +2,7 @@
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -220,6 +220,18 @@ messages_txt(
+     ],
+ )
+ 
+-# Keep timing-dependent bindings in _openroadpy.so. A separate WMK extension
+-# would link another copy of OpenSTA's singleton state (such as port directions)
+-# and interpret the Design's Liberty objects using that uninitialized copy.
++# Compiled into //:_openroad.so with the other Python modules rather than a
++# separate extension: that would link another copy of OpenSTA's singleton
++# state (such as port directions) and interpret the Design's Liberty objects
++# using that uninitialized copy.
++python_wrap_library(
++    name = "py_wrap",
++    includes = [
++        "include",
++        "src",
++    ],
++    deps = [
++        ":hmac_sha256",
++        ":wmk",
++    ],
++)
+-- 
+2.54.0
+

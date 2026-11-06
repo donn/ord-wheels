@@ -1,0 +1,260 @@
+From f1a13faa1f9837678f085f6dad9c18a51dad3b36 Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Mon, 12 Oct 2026 03:14:37 +0000
+Subject: [PATCH 11/13] python: name every Bazel SWIG module <tool>_py
+
+odb, utl, gpl and wmk were the only Bazel modules not named <tool>_py, a
+leftover from when they were standalone extensions. Name them odb_py,
+utl_py, gpl_py and wmk_py as CMake does, so every extension in
+_openroad.so is _<tool>_py and the loader needs no special cases. The
+package paths stay (src.odb.odb_py), since other generated wrappers import
+odb and utl through them; `import odb` and `import utl` are unchanged.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ python/modules/_openroad_loader.py | 18 +++++++-----------
+ python/modules/gpl.py              |  2 +-
+ python/modules/odb.py              |  2 +-
+ python/modules/utl.py              |  2 +-
+ python/modules/wmk.py              |  2 +-
+ python/openroad/odb.py             |  2 +-
+ python/openroad/utl.py             |  2 +-
+ src/gpl/BUILD                      |  2 +-
+ src/gpl/src/replace-py.i           |  2 +-
+ src/odb/BUILD                      | 10 +++++-----
+ src/odb/src/swig/common/odb.i      |  2 +-
+ src/utl/BUILD                      |  6 +-----
+ src/utl/src/Logger-py.i            |  2 +-
+ src/wmk/BUILD                      |  2 +-
+ src/wmk/src/watermark-py.i         |  2 +-
+ 15 files changed, 25 insertions(+), 33 deletions(-)
+
+diff --git a/python/modules/_openroad_loader.py b/python/modules/_openroad_loader.py
+index a04023e226..69c5ab2bf8 100644
+--- a/python/modules/_openroad_loader.py
++++ b/python/modules/_openroad_loader.py
+@@ -3,7 +3,7 @@
+ 
+ """Loads every OpenROAD Python extension module from one shared library.
+ 
+-Each SWIG module has its own init function (PyInit__ord_py, PyInit__odb,
++Each SWIG module has its own init function (PyInit__ord_py, PyInit__odb_py,
+ PyInit__ant_py, ...), and all of them are linked into _openroad.so. The
+ dynamic loader maps that file once, so the modules keep separate
+ namespaces while sharing one copy of the C++ state, as the modules linked
+@@ -16,16 +16,12 @@ import importlib.util
+ import os
+ import sys
+ 
+-# The extension modules in _openroad.so, without any package prefix.
+-_EXTENSIONS = frozenset(
+-    ["_ord_py", "_odb", "_utl", "_gpl", "_wmk"]
+-    + [
+-        f"_{tool}_py"
+-        for tool in (
+-            "ant cgt cts dpl drt exa fin grt ifp par pdn ppl psm rcx rmp rsz" " stt tap"
+-        ).split()
+-    ]
+-)
++# The modules in _openroad.so. Each one's extension is named _<module>_py.
++_MODULES = """
++    ord ant cgt cts dpl drt exa fin gpl grt ifp odb
++    par pdn ppl psm rcx rmp rsz stt tap utl wmk
++""".split()
++_EXTENSIONS = frozenset(f"_{module}_py" for module in _MODULES)
+ 
+ 
+ def _find_library():
+diff --git a/python/modules/gpl.py b/python/modules/gpl.py
+index ee92999128..e869a9c79c 100644
+--- a/python/modules/gpl.py
++++ b/python/modules/gpl.py
+@@ -2,4 +2,4 @@
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+ import _openroad_loader  # noqa: F401  (must precede the wrapper import)
+-from src.gpl.gpl import *
++from src.gpl.gpl_py import *
+diff --git a/python/modules/odb.py b/python/modules/odb.py
+index 0b00c74960..5cce28c10b 100644
+--- a/python/modules/odb.py
++++ b/python/modules/odb.py
+@@ -2,4 +2,4 @@
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+ import _openroad_loader  # noqa: F401  (must precede the wrapper import)
+-from src.odb.odb import *
++from src.odb.odb_py import *
+diff --git a/python/modules/utl.py b/python/modules/utl.py
+index caf0c0b537..e11689798f 100644
+--- a/python/modules/utl.py
++++ b/python/modules/utl.py
+@@ -2,4 +2,4 @@
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+ import _openroad_loader  # noqa: F401  (must precede the wrapper import)
+-from src.utl.utl import *
++from src.utl.utl_py import *
+diff --git a/python/modules/wmk.py b/python/modules/wmk.py
+index b25f95b801..08abe3beb3 100644
+--- a/python/modules/wmk.py
++++ b/python/modules/wmk.py
+@@ -2,4 +2,4 @@
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+ import _openroad_loader  # noqa: F401  (must precede the wrapper import)
+-from src.wmk.wmk import *
++from src.wmk.wmk_py import *
+diff --git a/python/openroad/odb.py b/python/openroad/odb.py
+index 3516495fac..4f94f2b7a5 100644
+--- a/python/openroad/odb.py
++++ b/python/openroad/odb.py
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025-2025, The OpenROAD Authors
+ 
+-from src.odb.odb import *
++from src.odb.odb_py import *
+diff --git a/python/openroad/utl.py b/python/openroad/utl.py
+index 7baf9640a7..0a456d42ff 100644
+--- a/python/openroad/utl.py
++++ b/python/openroad/utl.py
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025-2025, The OpenROAD Authors
+ 
+-from src.utl.utl import *
++from src.utl.utl_py import *
+diff --git a/src/gpl/BUILD b/src/gpl/BUILD
+index 5601c84b04..cd50a7ec53 100644
+--- a/src/gpl/BUILD
++++ b/src/gpl/BUILD
+@@ -277,7 +277,7 @@ python_wrap_cc(
+         "src/replace-py.i",
+         "//:error_swig-py",
+     ],
+-    module = "gpl",
++    module = "gpl_py",
+     root_swig_src = "src/replace-py.i",
+     swig_includes = [
+         "include",
+diff --git a/src/gpl/src/replace-py.i b/src/gpl/src/replace-py.i
+index 0dc40e4e5b..78dc263355 100644
+--- a/src/gpl/src/replace-py.i
++++ b/src/gpl/src/replace-py.i
+@@ -2,7 +2,7 @@
+ // Copyright (c) 2022-2025, The OpenROAD Authors
+ 
+ #ifdef BAZEL
+-%module(package="src.gpl") gpl
++%module(package="src.gpl") gpl_py
+ #else
+ %module gpl
+ #endif
+diff --git a/src/odb/BUILD b/src/odb/BUILD
+index f812a6ae34..436224f0f8 100644
+--- a/src/odb/BUILD
++++ b/src/odb/BUILD
+@@ -31,10 +31,10 @@ filegroup(
+ 
+ # ---- SWIG / Python bindings ----
+ #
+-# The Python targets (swig-py, _odb.so, odb_py) stay in this package
+-# because the generated odb.py import path encodes the Bazel package
+-# path (src.odb.odb); moving them would break every downstream Python
+-# consumer. The TCL SWIG, tcl_encode, swig_common, and ui targets
++# The Python targets (swig-py, py_wrap, odb_py) stay in this package
++# because the generated odb_py.py import path encodes the Bazel package
++# path (src.odb.odb_py), which other generated wrappers import; moving
++# them would break every downstream Python consumer. The TCL SWIG, tcl_encode, swig_common, and ui targets
+ # live in //src/odb/src/swig.
+ 
+ python_wrap_cc(
+@@ -46,7 +46,7 @@ python_wrap_cc(
+         "//:src/Exception.i",
+         "//src/odb/src/swig:swig_imports_py",
+     ],
+-    module = "odb",
++    module = "odb_py",
+     root_swig_src = "//src/odb/src/swig:common/odb.i",
+     swig_includes = [
+         "include",
+diff --git a/src/odb/src/swig/common/odb.i b/src/odb/src/swig/common/odb.i
+index 383e6d410e..3a0c1845bc 100644
+--- a/src/odb/src/swig/common/odb.i
++++ b/src/odb/src/swig/common/odb.i
+@@ -2,7 +2,7 @@
+ // Copyright (c) 2019-2025, The OpenROAD Authors
+ 
+ #ifdef BAZEL
+-%module(package="src.odb") odb
++%module(package="src.odb") odb_py
+ #endif
+ 
+ %{
+diff --git a/src/utl/BUILD b/src/utl/BUILD
+index 7b7f86092a..8321ae5ebb 100644
+--- a/src/utl/BUILD
++++ b/src/utl/BUILD
+@@ -98,10 +98,6 @@ cc_library(
+     ],
+ )
+ 
+-# This target compiles the SWIG C++ wrapper into a shared library (.so)
+-# that Python can load dynamically.
+-# This packages the SWIG-generated Python wrapper (odb.py) and the
+-# compiled C++ extension (_odb.so) together.
+ # The utl module is part of //:openroad_py.
+ alias(
+     name = "utl_py",
+@@ -168,7 +164,7 @@ python_wrap_cc(
+         "src/LoggerCommon.h",
+         "//:error_swig-py",
+     ],
+-    module = "utl",
++    module = "utl_py",
+     root_swig_src = "src/Logger-py.i",
+     swig_includes = [
+         "include",
+diff --git a/src/utl/src/Logger-py.i b/src/utl/src/Logger-py.i
+index bcbef5b832..b46e4be877 100644
+--- a/src/utl/src/Logger-py.i
++++ b/src/utl/src/Logger-py.i
+@@ -2,7 +2,7 @@
+ // Copyright (c) 2020-2025, The OpenROAD Authors
+ 
+ #ifdef BAZEL
+-%module(package="src.utl") utl
++%module(package="src.utl") utl_py
+ #else
+ %module utl_py
+ #endif
+diff --git a/src/wmk/BUILD b/src/wmk/BUILD
+index 69f6bcbee5..aa67ab38f7 100644
+--- a/src/wmk/BUILD
++++ b/src/wmk/BUILD
+@@ -196,7 +196,7 @@ python_wrap_cc(
+         "src/watermark-py.i",
+         "//:error_swig-py",
+     ],
+-    module = "wmk",
++    module = "wmk_py",
+     root_swig_src = "src/watermark-py.i",
+     swig_includes = [
+         "include",
+diff --git a/src/wmk/src/watermark-py.i b/src/wmk/src/watermark-py.i
+index 99857eb559..510a25f030 100644
+--- a/src/wmk/src/watermark-py.i
++++ b/src/wmk/src/watermark-py.i
+@@ -7,7 +7,7 @@
+ // embed a mark and check its own work in the same process.
+ 
+ #ifdef BAZEL
+-%module(package="src.wmk") wmk
++%module(package="src.wmk") wmk_py
+ #else
+ %module wmk_py
+ #endif
+-- 
+2.54.0
+

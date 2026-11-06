@@ -1,0 +1,192 @@
+From fb9640573323600c8acc2f56a0769dc5fcda60de Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Sun, 11 Oct 2026 22:03:53 +0000
+Subject: [PATCH 09/13] python: address review of the wheel packaging
+
+- Guard openroadpy's re-export of odb, utl and rmp with #ifdef BAZEL.
+  CMake registers them as top-level modules, so the src.* imports broke
+  `openroad -python` at startup.
+- //:openroad_py depends on //python/modules, so `import odb` still works
+  for downstream users of the public target.
+- bazel_test.sh no longer puts every src/* directory on PYTHONPATH, which
+  allowed a second copy of the extension modules to load.
+- Correct the comment and ORD-0105 message: destroying the current Tech
+  clears the instance even while older Techs are alive.
+- openroad_test frees its Tech explicitly instead of relying on immediate
+  collection; wheel_test installs the wheel with pip rather than unzipping.
+- Drop a stale comment left from the removed gpl extension.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ BUILD.bazel                      |  1 +
+ python/openroad/openroad_test.py |  8 +++++---
+ python/openroad/wheel_test.py    | 23 +++++++++++++++++------
+ src/OpenRoad-py.i                |  5 ++++-
+ src/OpenRoad.i                   | 10 +++++++++-
+ src/gpl/BUILD                    |  2 --
+ test/bazel_test.sh               |  6 ------
+ 7 files changed, 36 insertions(+), 19 deletions(-)
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+index 5bfce80551..c9d33148b5 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -439,6 +439,7 @@ py_library(
+     imports = ["."],
+     visibility = ["//visibility:public"],
+     deps = [
++        "//python/modules",
+         "//src/odb:odb_py",
+         "//src/rmp:rmp_py",
+         "//src/utl:utl_py",
+diff --git a/python/openroad/openroad_test.py b/python/openroad/openroad_test.py
+index 01834bb278..c6d309545a 100644
+--- a/python/openroad/openroad_test.py
++++ b/python/openroad/openroad_test.py
+@@ -4,6 +4,7 @@
+ """Python binding unit tests for the openroad package: one behavior per
+ test, each on its own Tech."""
+ 
++import gc
+ import unittest
+ 
+ import odb
+@@ -21,9 +22,10 @@ class OpenRoadApiTest(unittest.TestCase):
+         self.assertEqual(thread_count(), 1)
+ 
+     def test_thread_count_without_tech(self):
+-        # A Tech that has been garbage collected no longer owns an
+-        # OpenRoad instance.
+-        Tech()
++        # Destroying the current Tech leaves no OpenRoad instance.
++        tech = Tech()
++        del tech
++        gc.collect()
+         with self.assertRaisesRegex(RuntimeError, "ORD-0105"):
+             set_thread_count(2)
+         with self.assertRaisesRegex(RuntimeError, "ORD-0105"):
+diff --git a/python/openroad/wheel_test.py b/python/openroad/wheel_test.py
+index 7880227c35..9ad2d60313 100644
+--- a/python/openroad/wheel_test.py
++++ b/python/openroad/wheel_test.py
+@@ -1,8 +1,8 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-"""Installs the openroad wheel into an empty directory and imports it in a
+-fresh interpreter, as a user who ran `pip install` would."""
++"""Installs the openroad wheel with pip into an empty directory and imports
++it in a fresh interpreter."""
+ 
+ import glob
+ import os
+@@ -10,7 +10,6 @@ import subprocess
+ import sys
+ import tempfile
+ import unittest
+-import zipfile
+ 
+ # Run in a child interpreter with -I, so neither PYTHONPATH nor this test's
+ # runfiles can supply a module the wheel is missing.
+@@ -37,9 +36,21 @@ class WheelTest(unittest.TestCase):
+         wheels = glob.glob(os.path.join(os.path.dirname(__file__), "*.whl"))
+         self.assertEqual(len(wheels), 1, wheels)
+         with tempfile.TemporaryDirectory() as site:
+-            # A wheel's payload is its install layout.
+-            with zipfile.ZipFile(wheels[0]) as wheel:
+-                wheel.extractall(site)
++            subprocess.run(
++                [
++                    sys.executable,
++                    "-m",
++                    "pip",
++                    "install",
++                    "--quiet",
++                    "--no-index",
++                    "--no-deps",
++                    "--target",
++                    site,
++                    wheels[0],
++                ],
++                check=True,
++            )
+             result = subprocess.run(
+                 [sys.executable, "-I", "-c", IMPORT_CHECK, site],
+                 capture_output=True,
+diff --git a/src/OpenRoad-py.i b/src/OpenRoad-py.i
+index b25dc92377..39ffbe6439 100644
+--- a/src/OpenRoad-py.i
++++ b/src/OpenRoad-py.i
+@@ -120,10 +120,12 @@ namespace ord {
+ 
+ %}
+ 
++#ifdef BAZEL
+ // odb, utl and rmp are separate extension modules that other extensions
+ // import, so they cannot be compiled in here.  Re-export them so
+ // `from openroadpy import *` is the whole API.  Each module defines its own
+-// SwigPyIterator; keep this one.
++// SwigPyIterator; keep this one.  (CMake registers odb, utl and rmp as
++// their own top-level modules instead.)
+ %pythoncode %{
+ _openroadpy_iterator = SwigPyIterator
+ from src.odb.odb import *
+@@ -132,3 +134,4 @@ from src.rmp.rmp_py import *
+ SwigPyIterator = _openroadpy_iterator
+ del _openroadpy_iterator
+ %}
++#endif
+diff --git a/src/OpenRoad.i b/src/OpenRoad.i
+index ae3b02dda2..c35b4719f2 100644
+--- a/src/OpenRoad.i
++++ b/src/OpenRoad.i
+@@ -39,7 +39,15 @@ using odb::dbDatabase;
+ OpenRoad *
+ getOpenRoad()
+ {
+-  return OpenRoad::openRoad();
++  // From Python the current instance is the one set by the most recently
++  // created Tech, and destroying that Tech clears it even if older ones
++  // are still alive.
++  OpenRoad *openroad = OpenRoad::openRoad();
++  if (openroad == nullptr) {
++    utl::Logger::defaultLogger()->error(
++        utl::ORD, 105, "No current OpenROAD instance; create a Tech and keep it alive.");
++  }
++  return openroad;
+ }
+ 
+ utl::Logger *
+diff --git a/src/gpl/BUILD b/src/gpl/BUILD
+index e064015c01..5601c84b04 100644
+--- a/src/gpl/BUILD
++++ b/src/gpl/BUILD
+@@ -241,8 +241,6 @@ cc_library(
+     ],
+ )
+ 
+-# This target compiles the SWIG C++ wrapper into a shared library (.so)
+-# that Python can load dynamically.
+ tcl_encode(
+     name = "tcl",
+     srcs = [
+diff --git a/test/bazel_test.sh b/test/bazel_test.sh
+index a6bb4c0323..9f03a8a607 100755
+--- a/test/bazel_test.sh
++++ b/test/bazel_test.sh
+@@ -22,12 +22,6 @@ if [ -n "${TEST_SRCDIR:-}" ]; then
+ 	if [ -d "${workspace_root}/python" ]; then
+ 		python_paths="${python_paths}:${workspace_root}/python"
+ 	fi
+-	for src_dir in "${workspace_root}"/src/*; do
+-		if [ -d "${src_dir}" ]; then
+-			python_paths="${python_paths}:${src_dir}"
+-		fi
+-	done
+-
+ 	export PYTHONPATH="${python_paths}${PYTHONPATH:+:$PYTHONPATH}"
+ 	if [ -n "${TEST_GOLDEN_FILE:-}" ]; then
+ 		export TEST_GOLDEN_FILE="${workspace_root}/${TEST_GOLDEN_FILE}"
+-- 
+2.54.0
+

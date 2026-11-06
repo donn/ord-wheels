@@ -1,0 +1,185 @@
+From 46627e07ab6f8573c43a54feca8686113a47b8fe Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Sun, 11 Oct 2026 15:45:45 +0000
+Subject: [PATCH 06/13] python: provide every bound tool module in
+ python/modules
+
+Add cgt, dpl, exa, fin, par, ppl, psm, rsz and wmk, matching the modules
+`openroad -python` registers, so the wheel and tests can import them.
+wmk_py no longer puts src/wmk on sys.path, as for odb. syn, ram and web
+have no Python extension in the Bazel build and are left out.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ python/modules/BUILD          | 3 ++-
+ python/modules/cgt.py         | 5 +++++
+ python/modules/dpl.py         | 5 +++++
+ python/modules/exa.py         | 5 +++++
+ python/modules/fin.py         | 5 +++++
+ python/modules/par.py         | 5 +++++
+ python/modules/ppl.py         | 5 +++++
+ python/modules/psm.py         | 5 +++++
+ python/modules/rsz.py         | 5 +++++
+ python/modules/wmk.py         | 4 ++++
+ python/openroad/wheel_test.py | 4 +++-
+ src/wmk/BUILD                 | 4 +++-
+ 12 files changed, 52 insertions(+), 3 deletions(-)
+ create mode 100644 python/modules/cgt.py
+ create mode 100644 python/modules/dpl.py
+ create mode 100644 python/modules/exa.py
+ create mode 100644 python/modules/fin.py
+ create mode 100644 python/modules/par.py
+ create mode 100644 python/modules/ppl.py
+ create mode 100644 python/modules/psm.py
+ create mode 100644 python/modules/rsz.py
+ create mode 100644 python/modules/wmk.py
+
+diff --git a/python/modules/BUILD b/python/modules/BUILD
+index 69e13aea2c..9215c5b5a5 100644
+--- a/python/modules/BUILD
++++ b/python/modules/BUILD
+@@ -6,7 +6,8 @@ load("@rules_python//python:defs.bzl", "py_library")
+ package(features = ["layering_check"])
+ 
+ # Top-level per-tool modules (import odb, import ant, ...), matching the
+-# modules `openroad -python` provides. They re-export the extension
++# modules `openroad -python` provides, except syn, ram and web, which have
++# no Python extension in the Bazel build. They re-export the extension
+ # modules, so //python/openroad:openroadpy depends on this target and the
+ # wheel installs these files at the top level.
+ py_library(
+diff --git a/python/modules/cgt.py b/python/modules/cgt.py
+new file mode 100644
+index 0000000000..6dc8282887
+--- /dev/null
++++ b/python/modules/cgt.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The cgt commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/dpl.py b/python/modules/dpl.py
+new file mode 100644
+index 0000000000..58c1a23c54
+--- /dev/null
++++ b/python/modules/dpl.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The dpl commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/exa.py b/python/modules/exa.py
+new file mode 100644
+index 0000000000..9fde6854d1
+--- /dev/null
++++ b/python/modules/exa.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The exa commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/fin.py b/python/modules/fin.py
+new file mode 100644
+index 0000000000..bec3f8566a
+--- /dev/null
++++ b/python/modules/fin.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The fin commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/par.py b/python/modules/par.py
+new file mode 100644
+index 0000000000..9059e89f18
+--- /dev/null
++++ b/python/modules/par.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The par commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/ppl.py b/python/modules/ppl.py
+new file mode 100644
+index 0000000000..df3436ed08
+--- /dev/null
++++ b/python/modules/ppl.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The ppl commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/psm.py b/python/modules/psm.py
+new file mode 100644
+index 0000000000..1b4b7eb915
+--- /dev/null
++++ b/python/modules/psm.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The psm commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/rsz.py b/python/modules/rsz.py
+new file mode 100644
+index 0000000000..5b94f2a246
+--- /dev/null
++++ b/python/modules/rsz.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The rsz commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/wmk.py b/python/modules/wmk.py
+new file mode 100644
+index 0000000000..de781b2599
+--- /dev/null
++++ b/python/modules/wmk.py
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++from src.wmk.wmk import *
+diff --git a/python/openroad/wheel_test.py b/python/openroad/wheel_test.py
+index ece5047951..4338f0dc44 100644
+--- a/python/openroad/wheel_test.py
++++ b/python/openroad/wheel_test.py
+@@ -18,11 +18,13 @@ IMPORT_CHECK = """
+ import sys
+ sys.path.insert(0, sys.argv[1])
+ import openroad
+-import odb, utl, gpl, ant, cts, drt, grt, ifp, pdn, rcx, stt, tap
++import odb, utl, gpl, ant, cgt, cts, dpl, drt, exa, fin, grt, ifp
++import par, pdn, ppl, psm, rcx, rsz, stt, tap, wmk
+ from openroad import Design, Tech
+ tech = Tech()
+ assert odb.dbDatabase is not None
+ assert hasattr(ant, "AntennaChecker")
++assert hasattr(wmk, "Watermark")
+ assert isinstance(utl.ANT, int)
+ print("imported", openroad.__file__)
+ """
+diff --git a/src/wmk/BUILD b/src/wmk/BUILD
+index 53e95f94fa..a2b602706c 100644
+--- a/src/wmk/BUILD
++++ b/src/wmk/BUILD
+@@ -227,7 +227,9 @@ messages_txt(
+ py_library(
+     name = "wmk_py",
+     srcs = ["wmk.py"],
+-    imports = ["."],
++    # Imported as src.wmk.wmk; //python/modules provides the top-level
++    # name, so this directory stays off sys.path and the module is loaded
++    # once.
+     visibility = ["//visibility:public"],
+     deps = ["//:openroad_py"],
+ )
+-- 
+2.54.0
+

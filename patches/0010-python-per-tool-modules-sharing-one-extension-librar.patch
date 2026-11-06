@@ -1,0 +1,1107 @@
+From ccd5202e75be0f969ed412dd2e019c30e594f31e Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Mon, 12 Oct 2026 02:08:50 +0000
+Subject: [PATCH 10/13] python: per-tool modules sharing one extension library
+
+The Bazel Python bindings compiled every tool into one combined module,
+openroadpy, with odb, utl and rmp as separate extensions. The combined
+module flattened all tools into one namespace (cts and wmk both define
+CtsOptions, so wmk's was renamed), and each separate extension carried its
+own static copy of odb, utl and the logger.
+
+Link every tool's SWIG module (ord_py, odb, utl, ant_py, cts_py, ...) into
+one library, _openroad.so. python/modules/_openroad_loader.py loads each
+module's init function from that library with ExtensionFileLoader, the
+counterpart of CMake's PyImport_AppendInittab: the tools keep separate
+namespaces while the dynamic loader maps the library once, so they share
+one copy of the C++ state. `import openroad` imports every tool module, as
+`openroad -python` does at startup, so objects Design returns get their
+tool's class. The flat openroadpy module is gone; its one user,
+test/downstream, now imports from openroad.
+
+- The wheel ships _openroad.so instead of _openroadpy.so, _odb.so, _utl.so
+  and _rmp_py.so (52 MB, from 64 MB).
+- odb_py, utl_py and rmp_py are aliases of //:openroad_py.
+- par's vector templates were skipped under Bazel to avoid duplicates in
+  the combined module; as its own module par needs them.
+- ord::getLogger() falls back to the default logger when no Tech exists,
+  so utl's Python logging works before a Tech is created and otherwise
+  uses the Tech's logger.
+- test/helpers.py takes PlaceOptions from gpl under Bazel too.
+- modules_test checks the separate namespaces, the single library mapping,
+  objects crossing modules and the shared database.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ BUILD.bazel                         | 117 +++++++++++++++-------------
+ docs/agents/testing.md              |   7 +-
+ docs/user/Bazel.md                  |   5 +-
+ python/modules/BUILD                |   7 +-
+ python/modules/_openroad_loader.py  |  53 +++++++++++++
+ python/modules/ant.py               |   3 +-
+ python/modules/cgt.py               |   3 +-
+ python/modules/cts.py               |   3 +-
+ python/modules/dpl.py               |   3 +-
+ python/modules/drt.py               |   3 +-
+ python/modules/exa.py               |   3 +-
+ python/modules/fin.py               |   3 +-
+ python/modules/gpl.py               |   3 +-
+ python/modules/grt.py               |   3 +-
+ python/modules/ifp.py               |   3 +-
+ python/modules/odb.py               |   3 +-
+ python/modules/par.py               |   3 +-
+ python/modules/pdn.py               |   3 +-
+ python/modules/ppl.py               |   3 +-
+ python/modules/psm.py               |   3 +-
+ python/modules/rcx.py               |   3 +-
+ python/modules/rmp.py               |   3 +-
+ python/modules/rsz.py               |   3 +-
+ python/modules/stt.py               |   3 +-
+ python/modules/tap.py               |   3 +-
+ python/modules/utl.py               |   3 +-
+ python/modules/wmk.py               |   7 +-
+ python/openroad/BUILD               |  17 +++-
+ python/openroad/__init__.py         |  10 ++-
+ python/openroad/modules_test.py     |  67 ++++++++++++++++
+ src/OpenRoad-py.i                   |  37 ---------
+ src/OpenRoad.i                      |   5 +-
+ src/ant/test/BUILD                  |   8 ++
+ src/odb/BUILD                       |  44 +++++------
+ src/par/src/partitionmgr-py.i       |   2 -
+ src/rmp/BUILD                       |  61 +++++++--------
+ src/utl/BUILD                       |  58 +++++++-------
+ test/downstream/BUILD.bazel         |   4 +-
+ test/downstream/openroad_py_test.py |   2 +-
+ test/helpers.py                     |   8 +-
+ 40 files changed, 355 insertions(+), 227 deletions(-)
+ create mode 100644 python/modules/_openroad_loader.py
+ create mode 100644 python/openroad/modules_test.py
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+index c9d33148b5..99be7aaaee 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -394,74 +394,82 @@ tcl_wrap_cc(
+     ],
+ )
+ 
+-cc_binary(
+-    name = "_openroadpy.so",
++# The Python bindings: every module (ord_py, odb, utl, ant_py, cts_py, ...)
++# keeps its own namespace, as in the CMake build, and all of them are linked
++# into one library, _openroad.so, so they share a single copy of the C++
++# state. python/modules/_openroad_loader.py loads each module's init
++# function from that library.
++python_wrap_cc(
++    name = "openroad_swig-py",
++    srcs = [
++        "include/ord/Design.h",
++        "include/ord/Tech.h",
++        "include/ord/Timing.h",
++        "src/OpenRoad-py.i",
++        ":error_swig-py",
++    ],
++    module = "ord_py",
++    root_swig_src = "src/OpenRoad-py.i",
++    swig_includes = [
++        "include",
++        "src",
++    ],
++    deps = [
++        "//src/odb:swig-py",
++        "//src/utl:swig-py",
++    ],
++)
++
++cc_library(
++    name = "ord_py_wrap",
+     srcs = [":openroad_swig-py"],
+-    defines = [PYTHON_STABLE_API_DEFINE],
+-    linkopts = PYTHON_EXTENSION_LINKOPTS,
+-    linkshared = True,
++    local_defines = [PYTHON_STABLE_API_DEFINE],
+     deps = [
+         ":openroad_lib",
+         ":ord",
+-        "//src/ant",
+-        "//src/cgt",
+-        "//src/cts",
+-        "//src/dpl",
+-        "//src/drt",
+-        "//src/exa",
+-        "//src/fin",
+-        "//src/gpl",
+-        "//src/grt",
+-        "//src/gui",
+         "//src/ifp",
+         "//src/odb/src/db",
+-        "//src/par",
+-        "//src/pdn",
+-        "//src/ppl",
+-        "//src/psm",
+-        "//src/rcx",
+-        "//src/rsz",
+-        "//src/stt",
+-        "//src/tap",
+         "//src/utl",
+-        "//src/web:core",
+-        "//src/wmk",
+-        "//src/wmk:hmac_sha256",
+         "@boost.stacktrace",
+         "@rules_python//python/cc:current_py_cc_headers",
+     ],
++    alwayslink = True,
+ )
+ 
+-py_library(
+-    name = "openroad_py",
+-    srcs = [":openroad_swig-py"],
+-    data = [":_openroadpy.so"],
+-    imports = ["."],
+-    visibility = ["//visibility:public"],
++cc_binary(
++    name = "_openroad.so",
++    linkopts = PYTHON_EXTENSION_LINKOPTS,
++    linkshared = True,
+     deps = [
+-        "//python/modules",
+-        "//src/odb:odb_py",
+-        "//src/rmp:rmp_py",
+-        "//src/utl:utl_py",
++        ":ord_py_wrap",
++        "//src/ant:py_wrap",
++        "//src/cgt:py_wrap",
++        "//src/cts:py_wrap",
++        "//src/dpl:py_wrap",
++        "//src/drt:py_wrap",
++        "//src/exa:py_wrap",
++        "//src/fin:py_wrap",
++        "//src/gpl:py_wrap",
++        "//src/grt:py_wrap",
++        "//src/ifp:py_wrap",
++        "//src/odb:py_wrap",
++        "//src/par:py_wrap",
++        "//src/pdn:py_wrap",
++        "//src/ppl:py_wrap",
++        "//src/psm:py_wrap",
++        "//src/rcx:py_wrap",
++        "//src/rmp:py_wrap",
++        "//src/rsz:py_wrap",
++        "//src/stt:py_wrap",
++        "//src/tap:py_wrap",
++        "//src/utl:py_wrap",
++        "//src/wmk:py_wrap",
+     ],
+ )
+ 
+-python_wrap_cc(
+-    name = "openroad_swig-py",
+-    srcs = [
+-        "include/ord/Design.h",
+-        "include/ord/Tech.h",
+-        "include/ord/Timing.h",
+-        "src/OpenRoad-py.i",
+-        ":error_swig-py",
+-    ],
+-    module = "openroadpy",
+-    root_swig_src = "src/OpenRoad-py.i",
+-    swig_includes = [
+-        "include",
+-        "src",
+-    ],
+-    deps = [
++py_library(
++    name = "openroad_py",
++    srcs = [":openroad_swig-py"] + [
+         "//src/ant:swig-py",
+         "//src/cgt:swig-py",
+         "//src/cts:swig-py",
+@@ -478,12 +486,17 @@ python_wrap_cc(
+         "//src/ppl:swig-py",
+         "//src/psm:swig-py",
+         "//src/rcx:swig-py",
++        "//src/rmp:swig-py",
+         "//src/rsz:swig-py",
+         "//src/stt:swig-py",
+         "//src/tap:swig-py",
+         "//src/utl:swig-py",
+         "//src/wmk:swig-py",
+     ],
++    data = [":_openroad.so"],
++    imports = ["."],
++    visibility = ["//visibility:public"],
++    deps = ["//python/modules"],
+ )
+ 
+ filegroup(
+diff --git a/docs/agents/testing.md b/docs/agents/testing.md
+index b0d4d0fbf2..81ea7e6006 100644
+--- a/docs/agents/testing.md
++++ b/docs/agents/testing.md
+@@ -107,8 +107,11 @@ py_test(
+ 
+ `//python/openroad:openroadpy` provides `import openroad` and the per-tool
+ modules (`import odb`, `import ant`, ...) from `python/modules`, the same
+-names the wheel installs. Keep each `Tech` alive while its `Design` or the
+-module-level functions (`set_thread_count`, ...) are in use.
++names the wheel installs and `openroad -python` provides. Each tool module
++has only its own API, as under CMake; all of them load from one library,
++`_openroad.so`, so they share one copy of the C++ state. Keep each `Tech`
++alive while its `Design` or the module-level functions (`set_thread_count`,
++...) are in use.
+ 
+ ### The openroad wheel
+ 
+diff --git a/docs/user/Bazel.md b/docs/user/Bazel.md
+index 6706dc1d56..31931f1c1b 100644
+--- a/docs/user/Bazel.md
++++ b/docs/user/Bazel.md
+@@ -417,13 +417,12 @@ OpenROAD's own UB, 11 tests, to be fixed separately:
+ tests, which run the instrumented `openroad` binary. They do **not** work for
+ the `py`-tagged tests, which import OpenROAD as a Python extension module:
+ 
+-    ImportError: _openroadpy.so: undefined symbol: __ubsan_handle_pointer_overflow_abort
++    ImportError: _openroad.so: undefined symbol: __ubsan_handle_pointer_overflow_abort
+ 
+ Clang links a sanitizer runtime into executables but not into shared
+ libraries, assuming whoever loads the library provides the symbols. That holds
+ for `openroad`, which statically links the runtime; it fails for
+-`_openroadpy.so` / `_odb.so` / `_utl.so`, which the *uninstrumented* system
+-`python3` dlopens.
++`_openroad.so`, which the *uninstrumented* system `python3` dlopens.
+ 
+ `-shared-libsan` is the mechanism for this case, but three things in
+ hermetic-llvm block it today:
+diff --git a/python/modules/BUILD b/python/modules/BUILD
+index caf36c46e0..2fb0a736ac 100644
+--- a/python/modules/BUILD
++++ b/python/modules/BUILD
+@@ -7,9 +7,10 @@ package(features = ["layering_check"])
+ 
+ # Top-level per-tool modules (import odb, import ant, ...), matching the
+ # modules `openroad -python` provides, except syn, ram and web, which have
+-# no Python extension in the Bazel build. Each re-exports openroadpy, which
+-# holds the whole API; //python/openroad:openroadpy depends on this target
+-# and the wheel installs these files at the top level.
++# no Python extension in the Bazel build. Each imports its own SWIG module
++# through _openroad_loader, which loads it from //:_openroad.so.
++# //:openroad_py depends on this target and the wheel installs these files
++# at the top level.
+ py_library(
+     name = "modules",
+     srcs = glob(["*.py"]),
+diff --git a/python/modules/_openroad_loader.py b/python/modules/_openroad_loader.py
+new file mode 100644
+index 0000000000..a04023e226
+--- /dev/null
++++ b/python/modules/_openroad_loader.py
+@@ -0,0 +1,53 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++"""Loads every OpenROAD Python extension module from one shared library.
++
++Each SWIG module has its own init function (PyInit__ord_py, PyInit__odb,
++PyInit__ant_py, ...), and all of them are linked into _openroad.so. The
++dynamic loader maps that file once, so the modules keep separate
++namespaces while sharing one copy of the C++ state, as the modules linked
++into the CMake `openroad` executable do.
++"""
++
++import importlib.abc
++import importlib.machinery
++import importlib.util
++import os
++import sys
++
++# The extension modules in _openroad.so, without any package prefix.
++_EXTENSIONS = frozenset(
++    ["_ord_py", "_odb", "_utl", "_gpl", "_wmk"]
++    + [
++        f"_{tool}_py"
++        for tool in (
++            "ant cgt cts dpl drt exa fin grt ifp par pdn ppl psm rcx rmp rsz" " stt tap"
++        ).split()
++    ]
++)
++
++
++def _find_library():
++    # The library sits next to this file in an installed wheel and at the
++    # runfiles root under Bazel; both are on sys.path.
++    for entry in [os.path.dirname(__file__)] + sys.path:
++        candidate = os.path.join(entry or os.curdir, "_openroad.so")
++        if os.path.exists(candidate):
++            return os.path.abspath(candidate)
++    raise ImportError("Cannot find _openroad.so on sys.path")
++
++
++LIBRARY = _find_library()
++
++
++class _OpenRoadFinder(importlib.abc.MetaPathFinder):
++    def find_spec(self, fullname, path, target=None):
++        if fullname.rpartition(".")[2] not in _EXTENSIONS:
++            return None
++        loader = importlib.machinery.ExtensionFileLoader(fullname, LIBRARY)
++        return importlib.util.spec_from_file_location(fullname, LIBRARY, loader=loader)
++
++
++if not any(isinstance(finder, _OpenRoadFinder) for finder in sys.meta_path):
++    sys.meta_path.insert(0, _OpenRoadFinder())
+diff --git a/python/modules/ant.py b/python/modules/ant.py
+index 2a7c8f472a..bc3ce25529 100644
+--- a/python/modules/ant.py
++++ b/python/modules/ant.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.ant.ant_py import *
+diff --git a/python/modules/cgt.py b/python/modules/cgt.py
+index 2a7c8f472a..2ef0988961 100644
+--- a/python/modules/cgt.py
++++ b/python/modules/cgt.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.cgt.cgt_py import *
+diff --git a/python/modules/cts.py b/python/modules/cts.py
+index 2a7c8f472a..f42db5b584 100644
+--- a/python/modules/cts.py
++++ b/python/modules/cts.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.cts.cts_py import *
+diff --git a/python/modules/dpl.py b/python/modules/dpl.py
+index 2a7c8f472a..c0fffb5be3 100644
+--- a/python/modules/dpl.py
++++ b/python/modules/dpl.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.dpl.dpl_py import *
+diff --git a/python/modules/drt.py b/python/modules/drt.py
+index 2a7c8f472a..8b86bf3645 100644
+--- a/python/modules/drt.py
++++ b/python/modules/drt.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.drt.drt_py import *
+diff --git a/python/modules/exa.py b/python/modules/exa.py
+index 2a7c8f472a..8c6432fa99 100644
+--- a/python/modules/exa.py
++++ b/python/modules/exa.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.exa.exa_py import *
+diff --git a/python/modules/fin.py b/python/modules/fin.py
+index 2a7c8f472a..bcbf23c63b 100644
+--- a/python/modules/fin.py
++++ b/python/modules/fin.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.fin.fin_py import *
+diff --git a/python/modules/gpl.py b/python/modules/gpl.py
+index 2a7c8f472a..ee92999128 100644
+--- a/python/modules/gpl.py
++++ b/python/modules/gpl.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.gpl.gpl import *
+diff --git a/python/modules/grt.py b/python/modules/grt.py
+index 2a7c8f472a..304b29b307 100644
+--- a/python/modules/grt.py
++++ b/python/modules/grt.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.grt.grt_py import *
+diff --git a/python/modules/ifp.py b/python/modules/ifp.py
+index 2a7c8f472a..0d760dd853 100644
+--- a/python/modules/ifp.py
++++ b/python/modules/ifp.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.ifp.ifp_py import *
+diff --git a/python/modules/odb.py b/python/modules/odb.py
+index 2a7c8f472a..0b00c74960 100644
+--- a/python/modules/odb.py
++++ b/python/modules/odb.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.odb.odb import *
+diff --git a/python/modules/par.py b/python/modules/par.py
+index 2a7c8f472a..50ffab434d 100644
+--- a/python/modules/par.py
++++ b/python/modules/par.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.par.par_py import *
+diff --git a/python/modules/pdn.py b/python/modules/pdn.py
+index 2a7c8f472a..cbd89ade3f 100644
+--- a/python/modules/pdn.py
++++ b/python/modules/pdn.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.pdn.pdn_py import *
+diff --git a/python/modules/ppl.py b/python/modules/ppl.py
+index 2a7c8f472a..45911abaa8 100644
+--- a/python/modules/ppl.py
++++ b/python/modules/ppl.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.ppl.ppl_py import *
+diff --git a/python/modules/psm.py b/python/modules/psm.py
+index 2a7c8f472a..40a57eacf8 100644
+--- a/python/modules/psm.py
++++ b/python/modules/psm.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.psm.psm_py import *
+diff --git a/python/modules/rcx.py b/python/modules/rcx.py
+index 2a7c8f472a..d1ac8642dd 100644
+--- a/python/modules/rcx.py
++++ b/python/modules/rcx.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.rcx.rcx_py import *
+diff --git a/python/modules/rmp.py b/python/modules/rmp.py
+index 2a7c8f472a..e1326f6c64 100644
+--- a/python/modules/rmp.py
++++ b/python/modules/rmp.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.rmp.rmp_py import *
+diff --git a/python/modules/rsz.py b/python/modules/rsz.py
+index 2a7c8f472a..e17804e976 100644
+--- a/python/modules/rsz.py
++++ b/python/modules/rsz.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.rsz.rsz_py import *
+diff --git a/python/modules/stt.py b/python/modules/stt.py
+index 2a7c8f472a..0f064f5d87 100644
+--- a/python/modules/stt.py
++++ b/python/modules/stt.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.stt.stt_py import *
+diff --git a/python/modules/tap.py b/python/modules/tap.py
+index 2a7c8f472a..4c8d253bdd 100644
+--- a/python/modules/tap.py
++++ b/python/modules/tap.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.tap.tap_py import *
+diff --git a/python/modules/utl.py b/python/modules/utl.py
+index 2a7c8f472a..caf0c0b537 100644
+--- a/python/modules/utl.py
++++ b/python/modules/utl.py
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.utl.utl import *
+diff --git a/python/modules/wmk.py b/python/modules/wmk.py
+index c72547ef1a..b25f95b801 100644
+--- a/python/modules/wmk.py
++++ b/python/modules/wmk.py
+@@ -1,8 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from openroadpy import *
+-
+-# openroadpy is one namespace, where CtsOptions is the cts class; the
+-# watermark options are renamed there.
+-from openroadpy import WatermarkCtsOptions as CtsOptions
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from src.wmk.wmk import *
+diff --git a/python/openroad/BUILD b/python/openroad/BUILD
+index fe3fc89b25..7bc60c0bba 100644
+--- a/python/openroad/BUILD
++++ b/python/openroad/BUILD
+@@ -16,10 +16,7 @@ py_library(
+     ],
+     imports = [".."],
+     visibility = ["//visibility:public"],
+-    deps = [
+-        "//:openroad_py",
+-        "//python/modules",
+-    ],
++    deps = ["//:openroad_py"],
+ )
+ 
+ regression_test(
+@@ -70,3 +67,15 @@ py_test(
+     srcs = ["wheel_test.py"],
+     data = [":openroad_wheel"],
+ )
++
++# The per-tool modules: separate namespaces, one shared library.
++py_test(
++    name = "modules_test",
++    size = "small",
++    srcs = ["modules_test.py"],
++    data = [
++        "//src/ant/test:ant_check.def",
++        "//src/ant/test:ant_check.lef",
++    ],
++    deps = [":openroadpy"],
++)
+diff --git a/python/openroad/__init__.py b/python/openroad/__init__.py
+index 30f4de4c15..32cb8ea1e6 100644
+--- a/python/openroad/__init__.py
++++ b/python/openroad/__init__.py
+@@ -1,4 +1,12 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025-2025, The OpenROAD Authors
+ 
+-from openroadpy import *
++import _openroad_loader  # noqa: F401  (must precede the wrapper import)
++from ord_py import *
++
++# Import every tool module, as `openroad -python` does at startup, so that
++# objects Design returns (getOpendp(), getGlobalRouter(), ...) get their
++# tool's Python class rather than a bare SWIG pointer.
++import ant, cgt, cts, dpl, drt, exa, fin, gpl, grt, ifp  # noqa: E401, F401
++import odb, par, pdn, ppl, psm, rcx, rmp, rsz, stt, tap  # noqa: E401, F401
++import utl, wmk  # noqa: E401, F401
+diff --git a/python/openroad/modules_test.py b/python/openroad/modules_test.py
+new file mode 100644
+index 0000000000..cd4bdfcf2c
+--- /dev/null
++++ b/python/openroad/modules_test.py
+@@ -0,0 +1,67 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++"""The per-tool modules keep separate namespaces while sharing one library,
++and so one copy of the C++ state."""
++
++import os
++import sys
++import unittest
++
++import ant
++import cts
++import odb
++import openroad
++import wmk
++from openroad import Design, Tech
++
++import _openroad_loader
++
++TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "src", "ant", "test")
++
++
++class ModulesTest(unittest.TestCase):
++    def test_one_library_mapped_once(self):
++        extensions = [
++            module
++            for name, module in list(sys.modules.items())
++            if name.rpartition(".")[2] in _openroad_loader._EXTENSIONS
++        ]
++        self.assertGreaterEqual(len(extensions), 6)
++        self.assertEqual(
++            {module.__file__ for module in extensions}, {_openroad_loader.LIBRARY}
++        )
++        with open("/proc/self/maps") as maps:
++            libraries = {
++                os.path.basename(line.split()[-1])
++                for line in maps
++                if line.rstrip().endswith(".so") and "openroad" in line.lower()
++            }
++        self.assertEqual(libraries, {"_openroad.so"})
++
++    def test_tools_have_their_own_namespaces(self):
++        self.assertTrue(hasattr(ant, "AntennaChecker"))
++        self.assertFalse(hasattr(ant, "Tech"))
++        self.assertFalse(hasattr(cts, "AntennaChecker"))
++        self.assertFalse(hasattr(openroad, "AntennaChecker"))
++        # Both tools define CtsOptions; each module has its own.
++        self.assertIsNot(cts.CtsOptions, wmk.CtsOptions)
++
++    def test_objects_cross_modules(self):
++        tech = Tech()
++        self.assertIsInstance(tech.getDB(), odb.dbDatabase)
++        design = Design(tech)
++        self.assertIsInstance(design.getAntennaChecker(), ant.AntennaChecker)
++
++    def test_shared_state(self):
++        tech = Tech()
++        tech.readLef(os.path.join(TEST_DIR, "ant_check.lef"))
++        design = Design(tech)
++        design.readDef(os.path.join(TEST_DIR, "ant_check.def"))
++        # ant's code checks the database that ord's code loaded.
++        self.assertEqual(design.getAntennaChecker().checkAntennas(), 1)
++        self.assertIsInstance(design.getBlock().findNet("net50"), odb.dbNet)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/src/OpenRoad-py.i b/src/OpenRoad-py.i
+index 39ffbe6439..54d6d56757 100644
+--- a/src/OpenRoad-py.i
++++ b/src/OpenRoad-py.i
+@@ -66,27 +66,6 @@ get_db_block();
+ %template(TimingPathInfos) std::vector<ord::TimingPathInfo>;
+ 
+ #ifdef BAZEL
+-%include "src/gpl/src/replace-py.i"
+-%include "src/ifp/src/InitFloorplan-py.i"
+-%include "src/ant/src/AntennaChecker-py.i"
+-%include "src/cgt/src/cgt-py.i"
+-%include "src/cts/src/TritonCTS-py.i"
+-%include "src/dpl/src/Opendp-py.i"
+-%include "src/drt/src/TritonRoute-py.i"
+-%include "src/exa/src/example-py.i"
+-%include "src/fin/src/finale-py.i"
+-%include "src/grt/src/GlobalRouter-py.i"
+-%include "src/par/src/partitionmgr-py.i"
+-%include "src/pdn/src/PdnGen-py.i"
+-%include "src/ppl/src/IOPlacer-py.i"
+-%include "src/psm/src/pdnsim-py.i"
+-%include "src/rcx/src/ext-py.i"
+-%include "src/rsz/src/Resizer-py.i"
+-%include "src/stt/src/SteinerTreeBuilder-py.i"
+-%include "src/tap/src/tapcell-py.i"
+-// CTS also exposes CtsOptions; give WMK's options a distinct binding name.
+-%rename(WatermarkCtsOptions) wmk::CtsOptions;
+-%include "src/wmk/src/watermark-py.i"
+ %import "src/odb/src/swig/common/odb.i"
+ %import "src/utl/src/Logger-py.i"
+ #endif
+@@ -119,19 +98,3 @@ namespace ord {
+ }
+ 
+ %}
+-
+-#ifdef BAZEL
+-// odb, utl and rmp are separate extension modules that other extensions
+-// import, so they cannot be compiled in here.  Re-export them so
+-// `from openroadpy import *` is the whole API.  Each module defines its own
+-// SwigPyIterator; keep this one.  (CMake registers odb, utl and rmp as
+-// their own top-level modules instead.)
+-%pythoncode %{
+-_openroadpy_iterator = SwigPyIterator
+-from src.odb.odb import *
+-from src.utl.utl import *
+-from src.rmp.rmp_py import *
+-SwigPyIterator = _openroadpy_iterator
+-del _openroadpy_iterator
+-%}
+-#endif
+diff --git a/src/OpenRoad.i b/src/OpenRoad.i
+index c35b4719f2..3b6dd48e73 100644
+--- a/src/OpenRoad.i
++++ b/src/OpenRoad.i
+@@ -53,7 +53,10 @@ getOpenRoad()
+ utl::Logger *
+ getLogger()
+ {
+-  return OpenRoad::openRoad()->getLogger();
++  // Python can log before any Tech exists; use the default logger then.
++  OpenRoad *openroad = OpenRoad::openRoad();
++  return openroad != nullptr ? openroad->getLogger()
++                             : utl::Logger::defaultLogger();
+ }
+ 
+ dbDatabase *
+diff --git a/src/ant/test/BUILD b/src/ant/test/BUILD
+index 1590c3f426..5583c464a3 100644
+--- a/src/ant/test/BUILD
++++ b/src/ant/test/BUILD
+@@ -97,3 +97,11 @@ doc_check_test(
+     ],
+     visibility = ["//visibility:public"],
+ )
++
++exports_files(
++    [
++        "ant_check.def",
++        "ant_check.lef",
++    ],
++    visibility = ["//python/openroad:__pkg__"],
++)
+diff --git a/src/odb/BUILD b/src/odb/BUILD
+index 4f5263a7b0..f812a6ae34 100644
+--- a/src/odb/BUILD
++++ b/src/odb/BUILD
+@@ -1,9 +1,8 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025-2025, Precision Innovations Inc.
+ 
+-load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+-load("@rules_python//python:defs.bzl", "py_library")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_EXTENSION_LINKOPTS", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("@rules_cc//cc:cc_library.bzl", "cc_library")
++load("//bazel:python_wrap_cc.bzl", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+ 
+ package(
+@@ -59,27 +58,10 @@ python_wrap_cc(
+     ],
+ )
+ 
+-cc_binary(
+-    name = "_odb.so",
+-    srcs = [":swig-py"],
+-    defines = [PYTHON_STABLE_API_DEFINE],
+-    includes = ["src/swig/common"],
+-    linkopts = PYTHON_EXTENSION_LINKOPTS,
+-    linkshared = True,
+-    deps = [
+-        "//src/odb/src/db",
+-        "//src/odb/src/swig:swig_common",
+-        "@rules_python//python/cc:current_py_cc_headers",
+-    ],
+-)
+-
+-py_library(
++# The odb module is part of //:openroad_py.
++alias(
+     name = "odb_py",
+-    srcs = [":swig-py"],
+-    data = [":_odb.so"],
+-    # Imported as src.odb.odb; //python/modules provides the
+-    # top-level name, so this directory stays off sys.path and the module
+-    # is loaded once.
++    actual = "//:openroad_py",
+     visibility = ["//visibility:public"],
+ )
+ 
+@@ -132,3 +114,19 @@ messages_txt(
+         "//src/odb/test:__pkg__",
+     ],
+ )
++
++# Compiled into //:_openroad.so, the one library every OpenROAD Python
++# module is loaded from.
++cc_library(
++    name = "py_wrap",
++    srcs = [":swig-py"],
++    includes = ["src/swig/common"],
++    local_defines = [PYTHON_STABLE_API_DEFINE],
++    visibility = ["//:__pkg__"],
++    deps = [
++        "//src/odb/src/db",
++        "//src/odb/src/swig:swig_common",
++        "@rules_python//python/cc:current_py_cc_headers",
++    ],
++    alwayslink = True,
++)
+diff --git a/src/par/src/partitionmgr-py.i b/src/par/src/partitionmgr-py.i
+index f5d8db6271..a7c415270a 100644
+--- a/src/par/src/partitionmgr-py.i
++++ b/src/par/src/partitionmgr-py.i
+@@ -7,7 +7,6 @@
+ 
+ %include "../../Exception-py.i"
+ 
+-#ifndef BAZEL
+ %include <std_vector.i>
+ %include <std_string.i>
+ 
+@@ -19,6 +18,5 @@ namespace std
+ #endif
+   %template(vector_float) std::vector<float>;
+ }
+-#endif
+ 
+ %include "par/PartitionMgr.h"
+diff --git a/src/rmp/BUILD b/src/rmp/BUILD
+index fd5481c8af..c7d529cc24 100644
+--- a/src/rmp/BUILD
++++ b/src/rmp/BUILD
+@@ -1,10 +1,8 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025-2026, The OpenROAD Authors
+ 
+-load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("@rules_python//python:defs.bzl", "py_library")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_EXTENSION_LINKOPTS", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -124,36 +122,10 @@ cc_library(
+     ],
+ )
+ 
+-cc_binary(
+-    name = "_rmp_py.so",
+-    srcs = [":swig-py"],
+-    defines = [
+-        "BAZEL=1",
+-        PYTHON_STABLE_API_DEFINE,
+-    ],
+-    includes = ["src"],
+-    linkopts = PYTHON_EXTENSION_LINKOPTS,
+-    linkshared = True,
+-    deps = [
+-        ":rmp",
+-        "//:ord",
+-        "//src/cut",
+-        "//src/dbSta",
+-        "//src/odb/src/db",
+-        "//src/sta:opensta_lib",
+-        "//src/utl",
+-        "@boost.stacktrace",
+-        "@rules_python//python/cc:current_py_cc_headers",
+-    ],
+-)
+-
+-py_library(
++# The rmp module is part of //:openroad_py.
++alias(
+     name = "rmp_py",
+-    srcs = [":swig-py"],
+-    data = [":_rmp_py.so"],
+-    # Imported as src.rmp.rmp_py; //python/modules provides the top-level
+-    # name, so this directory stays off sys.path and the module is loaded
+-    # once.
++    actual = "//:openroad_py",
+     visibility = ["//visibility:public"],
+ )
+ 
+@@ -221,3 +193,28 @@ messages_txt(
+         "//src/rmp/test:__pkg__",
+     ],
+ )
++
++# Compiled into //:_openroad.so, the one library every OpenROAD Python
++# module is loaded from.
++cc_library(
++    name = "py_wrap",
++    srcs = [":swig-py"],
++    includes = ["src"],
++    local_defines = [
++        "BAZEL=1",
++        PYTHON_STABLE_API_DEFINE,
++    ],
++    visibility = ["//:__pkg__"],
++    deps = [
++        ":rmp",
++        "//:ord",
++        "//src/cut",
++        "//src/dbSta",
++        "//src/odb/src/db",
++        "//src/sta:opensta_lib",
++        "//src/utl",
++        "@boost.stacktrace",
++        "@rules_python//python/cc:current_py_cc_headers",
++    ],
++    alwayslink = True,
++)
+diff --git a/src/utl/BUILD b/src/utl/BUILD
+index c6629b9be9..7b7f86092a 100644
+--- a/src/utl/BUILD
++++ b/src/utl/BUILD
+@@ -1,10 +1,8 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+-load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("@rules_python//python:defs.bzl", "py_library")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_EXTENSION_LINKOPTS", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//test:regression.bzl", "messages_txt")
+@@ -102,37 +100,12 @@ cc_library(
+ 
+ # This target compiles the SWIG C++ wrapper into a shared library (.so)
+ # that Python can load dynamically.
+-cc_binary(
+-    name = "_utl.so",
+-    srcs = [
+-        "src/LoggerCommon.cpp",
+-        "src/LoggerCommon.h",
+-        ":swig-py",
+-    ],
+-    defines = [
+-        "BAZEL=1",
+-        PYTHON_STABLE_API_DEFINE,
+-    ],
+-    includes = ["src"],
+-    linkopts = PYTHON_EXTENSION_LINKOPTS,
+-    linkshared = True,
+-    deps = [
+-        "//src/utl",
+-        "@boost.stacktrace",
+-        "@rules_python//python/cc:current_py_cc_headers",
+-    ],
+-)
+-
+ # This packages the SWIG-generated Python wrapper (odb.py) and the
+ # compiled C++ extension (_odb.so) together.
+-py_library(
++# The utl module is part of //:openroad_py.
++alias(
+     name = "utl_py",
+-    srcs = [":swig-py"],  # Use the .py output from the swig-py rule
+-    # The data attribute makes the .so file available at runtime.
+-    data = [":_utl.so"],
+-    # Imported as src.utl.utl; //python/modules provides the
+-    # top-level name, so this directory stays off sys.path and the module
+-    # is loaded once.
++    actual = "//:openroad_py",
+     visibility = ["//visibility:public"],
+ )
+ 
+@@ -219,3 +192,26 @@ messages_txt(
+         "//src/utl/test:__pkg__",
+     ],
+ )
++
++# Compiled into //:_openroad.so, the one library every OpenROAD Python
++# module is loaded from.
++cc_library(
++    name = "py_wrap",
++    # LoggerCommon.cpp comes with the Tcl bindings that ord links.
++    srcs = [
++        "src/LoggerCommon.h",
++        ":swig-py",
++    ],
++    includes = ["src"],
++    local_defines = [
++        "BAZEL=1",
++        PYTHON_STABLE_API_DEFINE,
++    ],
++    visibility = ["//:__pkg__"],
++    deps = [
++        ":utl",
++        "@boost.stacktrace",
++        "@rules_python//python/cc:current_py_cc_headers",
++    ],
++    alwayslink = True,
++)
+diff --git a/test/downstream/BUILD.bazel b/test/downstream/BUILD.bazel
+index a9a1a970d2..145ba98740 100644
+--- a/test/downstream/BUILD.bazel
++++ b/test/downstream/BUILD.bazel
+@@ -27,8 +27,8 @@ cc_library(
+ )
+ 
+ genrule(
+-    name = "openroadpy_so_consumer",
+-    srcs = ["@openroad//:_openroadpy.so"],
++    name = "openroad_so_consumer",
++    srcs = ["@openroad//:_openroad.so"],
+     outs = ["so_consumer.txt"],
+     cmd = "echo ok > $@",
+ )
+diff --git a/test/downstream/openroad_py_test.py b/test/downstream/openroad_py_test.py
+index cdf0da5ca5..041e2a44ef 100644
+--- a/test/downstream/openroad_py_test.py
++++ b/test/downstream/openroad_py_test.py
+@@ -1,5 +1,5 @@
+ # Smoke test: verify the OpenROAD Python extension loads from a downstream project.
+-from openroadpy import Tech
++from openroad import Tech
+ 
+ tech = Tech()
+ print("OpenROAD Python extension loaded successfully")
+diff --git a/test/helpers.py b/test/helpers.py
+index 20b9be95b0..9ea3a47600 100644
+--- a/test/helpers.py
++++ b/test/helpers.py
+@@ -3,13 +3,7 @@ import os
+ import utl
+ import re
+ from openroad import Design
+-
+-if os.environ.get("BAZEL_TEST") == "1":
+-    from openroad import PlaceOptions
+-else:
+-    import gpl
+-
+-    PlaceOptions = gpl.PlaceOptions
++from gpl import PlaceOptions
+ 
+ 
+ def get_runfiles_path_to(path):
+-- 
+2.54.0
+

@@ -1,0 +1,528 @@
+From c7b61e655917741d52dd4aae2b7a686657a02c79 Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Sun, 11 Oct 2026 15:10:16 +0000
+Subject: [PATCH 04/13] python: make the openroad wheel installable and add
+ Python unit tests
+
+The wheel kept repository paths (python/openroad/, src/odb/odb.py), so
+`import openroad` failed after `pip install`, and the per-tool modules the
+tests import (odb, utl, ant, grt, ...) existed only as shims that
+test/bazel_test.sh wrote at test time.
+
+- python/modules holds the per-tool modules as files. openroadpy depends
+  on them, the wheel installs them and the openroad package at the top
+  level, and bazel_test.sh puts them on the path instead of writing shims.
+- odb_py, utl_py and gpl_py no longer add their source directories to
+  sys.path. A py_test's `import odb` had loaded a second copy of the
+  module next to the src.odb.odb that openroadpy uses, so isinstance
+  failed across the two.
+- Hermetic py_test examples: openroad_test (unittest) and wheel_test,
+  which installs the wheel into an empty directory and imports it in an
+  isolated interpreter.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ docs/agents/testing.md           | 29 ++++++++++++++++++
+ python/modules/BUILD             | 17 +++++++++++
+ python/modules/ant.py            |  5 ++++
+ python/modules/cts.py            |  5 ++++
+ python/modules/drt.py            |  5 ++++
+ python/modules/gpl.py            |  4 +++
+ python/modules/grt.py            |  5 ++++
+ python/modules/ifp.py            |  5 ++++
+ python/modules/odb.py            |  4 +++
+ python/modules/pdn.py            |  5 ++++
+ python/modules/rcx.py            |  5 ++++
+ python/modules/rmp.py            |  9 ++++++
+ python/modules/stt.py            |  5 ++++
+ python/modules/tap.py            |  5 ++++
+ python/modules/utl.py            |  4 +++
+ python/openroad/BUILD            | 26 ++++++++++++++++-
+ python/openroad/openroad_test.py | 39 +++++++++++++++++++++++++
+ python/openroad/wheel_test.py    | 50 ++++++++++++++++++++++++++++++++
+ src/gpl/BUILD                    |  5 ++--
+ src/odb/BUILD                    |  4 ++-
+ src/utl/BUILD                    |  5 ++--
+ test/bazel_test.sh               | 41 +++-----------------------
+ 22 files changed, 239 insertions(+), 43 deletions(-)
+ create mode 100644 python/modules/BUILD
+ create mode 100644 python/modules/ant.py
+ create mode 100644 python/modules/cts.py
+ create mode 100644 python/modules/drt.py
+ create mode 100644 python/modules/gpl.py
+ create mode 100644 python/modules/grt.py
+ create mode 100644 python/modules/ifp.py
+ create mode 100644 python/modules/odb.py
+ create mode 100644 python/modules/pdn.py
+ create mode 100644 python/modules/rcx.py
+ create mode 100644 python/modules/rmp.py
+ create mode 100644 python/modules/stt.py
+ create mode 100644 python/modules/tap.py
+ create mode 100644 python/modules/utl.py
+ create mode 100644 python/openroad/openroad_test.py
+ create mode 100644 python/openroad/wheel_test.py
+
+diff --git a/docs/agents/testing.md b/docs/agents/testing.md
+index 3386d77847..b0d4d0fbf2 100644
+--- a/docs/agents/testing.md
++++ b/docs/agents/testing.md
+@@ -87,3 +87,32 @@ Unit tests are C++ files located at `src/<module>/test/cpp`.
+ ### Test Registration
+ - CMake: `src/<module>/test/CMakeLists.txt`
+ - Bazel: `src/<module>/test/BUILD` or `src/<module>/test/cpp/BUILD`
++
++## Python Unit Tests
++
++Python binding tests can be plain `unittest` modules run as Bazel `py_test`
++targets on the hermetic interpreter, one test method per behavior. The
++example is `python/openroad/openroad_test.py`:
++
++```python
++load("@rules_python//python:defs.bzl", "py_test")
++
++py_test(
++    name = "openroad_test",
++    size = "small",
++    srcs = ["openroad_test.py"],
++    deps = ["//python/openroad:openroadpy"],
++)
++```
++
++`//python/openroad:openroadpy` provides `import openroad` and the per-tool
++modules (`import odb`, `import ant`, ...) from `python/modules`, the same
++names the wheel installs. Keep each `Tech` alive while its `Design` or the
++module-level functions (`set_thread_count`, ...) are in use.
++
++### The openroad wheel
++
++`bazelisk build //python/openroad:openroad_wheel` builds an abi3 wheel (CPython
++3.10 or later) that installs into any virtualenv with `pip install`.
++`//python/openroad:wheel_test` checks that it imports in a fresh interpreter
++without the Bazel runfiles.
+diff --git a/python/modules/BUILD b/python/modules/BUILD
+new file mode 100644
+index 0000000000..69e13aea2c
+--- /dev/null
++++ b/python/modules/BUILD
+@@ -0,0 +1,17 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++load("@rules_python//python:defs.bzl", "py_library")
++
++package(features = ["layering_check"])
++
++# Top-level per-tool modules (import odb, import ant, ...), matching the
++# modules `openroad -python` provides. They re-export the extension
++# modules, so //python/openroad:openroadpy depends on this target and the
++# wheel installs these files at the top level.
++py_library(
++    name = "modules",
++    srcs = glob(["*.py"]),
++    imports = ["."],
++    visibility = ["//visibility:public"],
++)
+diff --git a/python/modules/ant.py b/python/modules/ant.py
+new file mode 100644
+index 0000000000..7abfb7a931
+--- /dev/null
++++ b/python/modules/ant.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The ant commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/cts.py b/python/modules/cts.py
+new file mode 100644
+index 0000000000..44c58e1b40
+--- /dev/null
++++ b/python/modules/cts.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The cts commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/drt.py b/python/modules/drt.py
+new file mode 100644
+index 0000000000..ecb4e611b1
+--- /dev/null
++++ b/python/modules/drt.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The drt commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/gpl.py b/python/modules/gpl.py
+new file mode 100644
+index 0000000000..064ded42e6
+--- /dev/null
++++ b/python/modules/gpl.py
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++from src.gpl.gpl import *
+diff --git a/python/modules/grt.py b/python/modules/grt.py
+new file mode 100644
+index 0000000000..638dd33850
+--- /dev/null
++++ b/python/modules/grt.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The grt commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/ifp.py b/python/modules/ifp.py
+new file mode 100644
+index 0000000000..fd71959496
+--- /dev/null
++++ b/python/modules/ifp.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The ifp commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/odb.py b/python/modules/odb.py
+new file mode 100644
+index 0000000000..46b2ee6d3c
+--- /dev/null
++++ b/python/modules/odb.py
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++from src.odb.odb import *
+diff --git a/python/modules/pdn.py b/python/modules/pdn.py
+new file mode 100644
+index 0000000000..54dead0e55
+--- /dev/null
++++ b/python/modules/pdn.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The pdn commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/rcx.py b/python/modules/rcx.py
+new file mode 100644
+index 0000000000..4b084f3226
+--- /dev/null
++++ b/python/modules/rcx.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The rcx commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/rmp.py b/python/modules/rmp.py
+new file mode 100644
+index 0000000000..5d00e26506
+--- /dev/null
++++ b/python/modules/rmp.py
+@@ -0,0 +1,9 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# rmp has its own extension when it is built; otherwise its commands are in
++# the combined openroadpy module.
++try:
++    from rmp_py import *
++except ImportError:
++    from openroadpy import *
+diff --git a/python/modules/stt.py b/python/modules/stt.py
+new file mode 100644
+index 0000000000..bfc87ea268
+--- /dev/null
++++ b/python/modules/stt.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The stt commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/tap.py b/python/modules/tap.py
+new file mode 100644
+index 0000000000..284074a78b
+--- /dev/null
++++ b/python/modules/tap.py
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++# The tap commands live in the combined openroadpy module.
++from openroadpy import *
+diff --git a/python/modules/utl.py b/python/modules/utl.py
+new file mode 100644
+index 0000000000..fe5bbdc10c
+--- /dev/null
++++ b/python/modules/utl.py
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++from src.utl.utl import *
+diff --git a/python/openroad/BUILD b/python/openroad/BUILD
+index 84c0f321fc..23c1329799 100644
+--- a/python/openroad/BUILD
++++ b/python/openroad/BUILD
+@@ -1,4 +1,4 @@
+-load("@rules_python//python:defs.bzl", "py_library")
++load("@rules_python//python:defs.bzl", "py_library", "py_test")
+ 
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025-2025, The OpenROAD Authors
+@@ -18,6 +18,7 @@ py_library(
+     visibility = ["//visibility:public"],
+     deps = [
+         "//:openroad_py",
++        "//python/modules",
+         "//src/odb:odb_py",
+         "//src/utl:utl_py",
+         "//src/wmk:wmk_py",
+@@ -44,8 +45,31 @@ py_wheel(
+     platform = "linux_x86_64",
+     python_requires = ">=3.10",
+     python_tag = "cp310",
++    # Install the openroad package and the per-tool modules at the top
++    # level. The extension modules keep their src/<tool> paths, which the
++    # generated wrappers import from.
++    strip_path_prefixes = [
++        "python/modules/",
++        "python/",
++    ],
+     version = "0.0.1",
+     deps = [
+         ":openroad_pkg",
+     ],
+ )
++
++# Python binding unit tests run on the hermetic interpreter with unittest.
++py_test(
++    name = "openroad_test",
++    size = "small",
++    srcs = ["openroad_test.py"],
++    deps = [":openroadpy"],
++)
++
++# The wheel installs and imports on its own, without the Bazel runfiles.
++py_test(
++    name = "wheel_test",
++    size = "small",
++    srcs = ["wheel_test.py"],
++    data = [":openroad_wheel"],
++)
+diff --git a/python/openroad/openroad_test.py b/python/openroad/openroad_test.py
+new file mode 100644
+index 0000000000..7835638983
+--- /dev/null
++++ b/python/openroad/openroad_test.py
+@@ -0,0 +1,39 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++"""Python binding unit tests for the openroad package: one behavior per
++test, each on its own Tech."""
++
++import unittest
++
++import odb
++from openroad import Design, Tech, set_thread_count, thread_count
++
++
++class OpenRoadApiTest(unittest.TestCase):
++    def test_thread_count(self):
++        # The thread count belongs to the Tech's OpenRoad instance, which
++        # must stay alive while it is used.
++        tech = Tech()
++        set_thread_count(2)
++        self.assertEqual(thread_count(), 2)
++        set_thread_count(1)
++        self.assertEqual(thread_count(), 1)
++
++    def test_tech_has_database(self):
++        tech = Tech()
++        self.assertIsInstance(tech.getDB(), odb.dbDatabase)
++
++    def test_design_without_block(self):
++        tech = Tech()
++        design = Design(tech)
++        self.assertIsNone(design.getBlock())
++
++    def test_several_techs_in_one_process(self):
++        techs = [Tech() for _ in range(3)]
++        # Compare the underlying C++ pointers, not the proxy objects.
++        self.assertEqual(len({int(tech.getDB().this) for tech in techs}), 3)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/python/openroad/wheel_test.py b/python/openroad/wheel_test.py
+new file mode 100644
+index 0000000000..ece5047951
+--- /dev/null
++++ b/python/openroad/wheel_test.py
+@@ -0,0 +1,50 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2026, The OpenROAD Authors
++
++"""Installs the openroad wheel into an empty directory and imports it in a
++fresh interpreter, as a user who ran `pip install` would."""
++
++import glob
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++import zipfile
++
++# Run in a child interpreter with -I, so neither PYTHONPATH nor this test's
++# runfiles can supply a module the wheel is missing.
++IMPORT_CHECK = """
++import sys
++sys.path.insert(0, sys.argv[1])
++import openroad
++import odb, utl, gpl, ant, cts, drt, grt, ifp, pdn, rcx, stt, tap
++from openroad import Design, Tech
++tech = Tech()
++assert odb.dbDatabase is not None
++assert hasattr(ant, "AntennaChecker")
++assert isinstance(utl.ANT, int)
++print("imported", openroad.__file__)
++"""
++
++
++class WheelTest(unittest.TestCase):
++    def test_install_and_import(self):
++        wheels = glob.glob(os.path.join(os.path.dirname(__file__), "*.whl"))
++        self.assertEqual(len(wheels), 1, wheels)
++        with tempfile.TemporaryDirectory() as site:
++            # A wheel's payload is its install layout.
++            with zipfile.ZipFile(wheels[0]) as wheel:
++                wheel.extractall(site)
++            result = subprocess.run(
++                [sys.executable, "-I", "-c", IMPORT_CHECK, site],
++                capture_output=True,
++                text=True,
++                check=False,
++            )
++            self.assertEqual(result.returncode, 0, result.stderr)
++            self.assertIn(os.path.join(site, "openroad"), result.stdout)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/src/gpl/BUILD b/src/gpl/BUILD
+index e778a118b4..4cbb43b157 100644
+--- a/src/gpl/BUILD
++++ b/src/gpl/BUILD
+@@ -270,8 +270,9 @@ py_library(
+     srcs = [":swig-py"],  # Use the .py output from the swig-py rule
+     # The data attribute makes the .so file available at runtime.
+     data = [":_gpl.so"],
+-    # This allows imports relative to the workspace root.
+-    imports = ["."],
++    # Imported as src.gpl.gpl; //python/modules provides the
++    # top-level name, so this directory stays off sys.path and the module
++    # is loaded once.
+     visibility = ["//visibility:public"],
+ )
+ 
+diff --git a/src/odb/BUILD b/src/odb/BUILD
+index 076b425df8..4f5263a7b0 100644
+--- a/src/odb/BUILD
++++ b/src/odb/BUILD
+@@ -77,7 +77,9 @@ py_library(
+     name = "odb_py",
+     srcs = [":swig-py"],
+     data = [":_odb.so"],
+-    imports = ["."],
++    # Imported as src.odb.odb; //python/modules provides the
++    # top-level name, so this directory stays off sys.path and the module
++    # is loaded once.
+     visibility = ["//visibility:public"],
+ )
+ 
+diff --git a/src/utl/BUILD b/src/utl/BUILD
+index 4f8c99eabf..c6629b9be9 100644
+--- a/src/utl/BUILD
++++ b/src/utl/BUILD
+@@ -130,8 +130,9 @@ py_library(
+     srcs = [":swig-py"],  # Use the .py output from the swig-py rule
+     # The data attribute makes the .so file available at runtime.
+     data = [":_utl.so"],
+-    # This allows imports relative to the workspace root.
+-    imports = ["."],
++    # Imported as src.utl.utl; //python/modules provides the
++    # top-level name, so this directory stays off sys.path and the module
++    # is loaded once.
+     visibility = ["//visibility:public"],
+ )
+ 
+diff --git a/test/bazel_test.sh b/test/bazel_test.sh
+index 0abf882f56..a6bb4c0323 100755
+--- a/test/bazel_test.sh
++++ b/test/bazel_test.sh
+@@ -16,7 +16,9 @@ if [ -n "${TEST_SRCDIR:-}" ]; then
+ 	# (--guard_against_concurrent_changes). Suppress bytecode writing.
+ 	export PYTHONDONTWRITEBYTECODE=1
+ 	workspace_root="${TEST_SRCDIR}/${TEST_WORKSPACE:-_main}"
+-	python_paths="${workspace_root}"
++	# python/modules provides the per-tool modules (import odb, import ant,
++	# ...) that the wheel installs at the top level.
++	python_paths="${workspace_root}/python/modules:${workspace_root}"
+ 	if [ -d "${workspace_root}/python" ]; then
+ 		python_paths="${python_paths}:${workspace_root}/python"
+ 	fi
+@@ -26,42 +28,7 @@ if [ -n "${TEST_SRCDIR:-}" ]; then
+ 		fi
+ 	done
+ 
+-	shim_dir="${TEST_TMPDIR}/python_shims"
+-	mkdir -p "${shim_dir}"
+-
+-	write_openroad_shim() {
+-		cat >"${shim_dir}/$1.py" <<'EOF'
+-from openroadpy import *
+-EOF
+-	}
+-
+-	if [ -f "${workspace_root}/src/utl/utl.py" ]; then
+-		cp "${workspace_root}/src/utl/utl.py" "${shim_dir}/utl_py.py"
+-		cat >"${shim_dir}/utl.py" <<'EOF'
+-from utl_py import *
+-EOF
+-	else
+-		cat >"${shim_dir}/utl.py" <<'EOF'
+-from src.utl.utl import *
+-EOF
+-	fi
+-	cat >"${shim_dir}/odb.py" <<'EOF'
+-from src.odb.odb import *
+-EOF
+-	cat >"${shim_dir}/gpl.py" <<'EOF'
+-from src.gpl.gpl import *
+-EOF
+-	cat >"${shim_dir}/rmp.py" <<'EOF'
+-try:
+-    from rmp_py import *
+-except ImportError:
+-    from openroadpy import *
+-EOF
+-	for module in ant cts drt grt rcx stt tap ifp pdn; do
+-		write_openroad_shim "${module}"
+-	done
+-
+-	export PYTHONPATH="${shim_dir}:${python_paths}${PYTHONPATH:+:$PYTHONPATH}"
++	export PYTHONPATH="${python_paths}${PYTHONPATH:+:$PYTHONPATH}"
+ 	if [ -n "${TEST_GOLDEN_FILE:-}" ]; then
+ 		export TEST_GOLDEN_FILE="${workspace_root}/${TEST_GOLDEN_FILE}"
+ 	fi
+-- 
+2.54.0
+

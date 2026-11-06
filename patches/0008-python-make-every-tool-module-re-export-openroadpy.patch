@@ -1,0 +1,438 @@
+From 66dc1ff505a39ee5aa907431a4e99bc5143cece3 Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Sun, 11 Oct 2026 16:01:46 +0000
+Subject: [PATCH 08/13] python: make every tool module re-export openroadpy
+
+openroadpy now re-exports odb, utl and rmp, which stay separate extensions
+because other extensions import them, so `from openroadpy import *` is the
+whole API and every python/modules file is that one line. wmk adds an
+alias: in the shared namespace CtsOptions is the cts class, and the
+watermark options are WatermarkCtsOptions.
+
+gpl's classes were built twice, in openroadpy and in a separate _gpl.so,
+giving two PlaceOptions and Replace classes. Drop the separate extension
+(25 MB of the wheel), and drop src/wmk/wmk.py, which python/modules/wmk.py
+replaces.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ BUILD.bazel           |  2 +-
+ python/modules/BUILD  |  6 +++---
+ python/modules/ant.py |  1 -
+ python/modules/cgt.py |  1 -
+ python/modules/cts.py |  1 -
+ python/modules/dpl.py |  1 -
+ python/modules/drt.py |  1 -
+ python/modules/exa.py |  1 -
+ python/modules/fin.py |  1 -
+ python/modules/gpl.py |  2 +-
+ python/modules/grt.py |  1 -
+ python/modules/ifp.py |  1 -
+ python/modules/odb.py |  2 +-
+ python/modules/par.py |  1 -
+ python/modules/pdn.py |  1 -
+ python/modules/ppl.py |  1 -
+ python/modules/psm.py |  1 -
+ python/modules/rcx.py |  1 -
+ python/modules/rmp.py |  3 +--
+ python/modules/rsz.py |  1 -
+ python/modules/stt.py |  1 -
+ python/modules/tap.py |  1 -
+ python/modules/utl.py |  2 +-
+ python/modules/wmk.py |  6 +++++-
+ python/openroad/BUILD |  4 ----
+ src/OpenRoad-py.i     | 13 +++++++++++++
+ src/gpl/BUILD         | 35 +----------------------------------
+ src/wmk/BUILD         | 10 ----------
+ src/wmk/wmk.py        |  8 --------
+ 29 files changed, 27 insertions(+), 83 deletions(-)
+ delete mode 100644 src/wmk/wmk.py
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+index 9ce1c64bd3..5bfce80551 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -439,8 +439,8 @@ py_library(
+     imports = ["."],
+     visibility = ["//visibility:public"],
+     deps = [
+-        "//src/gpl:gpl_py",
+         "//src/odb:odb_py",
++        "//src/rmp:rmp_py",
+         "//src/utl:utl_py",
+     ],
+ )
+diff --git a/python/modules/BUILD b/python/modules/BUILD
+index 9215c5b5a5..caf36c46e0 100644
+--- a/python/modules/BUILD
++++ b/python/modules/BUILD
+@@ -7,9 +7,9 @@ package(features = ["layering_check"])
+ 
+ # Top-level per-tool modules (import odb, import ant, ...), matching the
+ # modules `openroad -python` provides, except syn, ram and web, which have
+-# no Python extension in the Bazel build. They re-export the extension
+-# modules, so //python/openroad:openroadpy depends on this target and the
+-# wheel installs these files at the top level.
++# no Python extension in the Bazel build. Each re-exports openroadpy, which
++# holds the whole API; //python/openroad:openroadpy depends on this target
++# and the wheel installs these files at the top level.
+ py_library(
+     name = "modules",
+     srcs = glob(["*.py"]),
+diff --git a/python/modules/ant.py b/python/modules/ant.py
+index 7abfb7a931..2a7c8f472a 100644
+--- a/python/modules/ant.py
++++ b/python/modules/ant.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The ant commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/cgt.py b/python/modules/cgt.py
+index 6dc8282887..2a7c8f472a 100644
+--- a/python/modules/cgt.py
++++ b/python/modules/cgt.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The cgt commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/cts.py b/python/modules/cts.py
+index 44c58e1b40..2a7c8f472a 100644
+--- a/python/modules/cts.py
++++ b/python/modules/cts.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The cts commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/dpl.py b/python/modules/dpl.py
+index 58c1a23c54..2a7c8f472a 100644
+--- a/python/modules/dpl.py
++++ b/python/modules/dpl.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The dpl commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/drt.py b/python/modules/drt.py
+index ecb4e611b1..2a7c8f472a 100644
+--- a/python/modules/drt.py
++++ b/python/modules/drt.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The drt commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/exa.py b/python/modules/exa.py
+index 9fde6854d1..2a7c8f472a 100644
+--- a/python/modules/exa.py
++++ b/python/modules/exa.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The exa commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/fin.py b/python/modules/fin.py
+index bec3f8566a..2a7c8f472a 100644
+--- a/python/modules/fin.py
++++ b/python/modules/fin.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The fin commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/gpl.py b/python/modules/gpl.py
+index 064ded42e6..2a7c8f472a 100644
+--- a/python/modules/gpl.py
++++ b/python/modules/gpl.py
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from src.gpl.gpl import *
++from openroadpy import *
+diff --git a/python/modules/grt.py b/python/modules/grt.py
+index 638dd33850..2a7c8f472a 100644
+--- a/python/modules/grt.py
++++ b/python/modules/grt.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The grt commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/ifp.py b/python/modules/ifp.py
+index fd71959496..2a7c8f472a 100644
+--- a/python/modules/ifp.py
++++ b/python/modules/ifp.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The ifp commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/odb.py b/python/modules/odb.py
+index 46b2ee6d3c..2a7c8f472a 100644
+--- a/python/modules/odb.py
++++ b/python/modules/odb.py
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from src.odb.odb import *
++from openroadpy import *
+diff --git a/python/modules/par.py b/python/modules/par.py
+index 9059e89f18..2a7c8f472a 100644
+--- a/python/modules/par.py
++++ b/python/modules/par.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The par commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/pdn.py b/python/modules/pdn.py
+index 54dead0e55..2a7c8f472a 100644
+--- a/python/modules/pdn.py
++++ b/python/modules/pdn.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The pdn commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/ppl.py b/python/modules/ppl.py
+index df3436ed08..2a7c8f472a 100644
+--- a/python/modules/ppl.py
++++ b/python/modules/ppl.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The ppl commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/psm.py b/python/modules/psm.py
+index 1b4b7eb915..2a7c8f472a 100644
+--- a/python/modules/psm.py
++++ b/python/modules/psm.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The psm commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/rcx.py b/python/modules/rcx.py
+index 4b084f3226..2a7c8f472a 100644
+--- a/python/modules/rcx.py
++++ b/python/modules/rcx.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The rcx commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/rmp.py b/python/modules/rmp.py
+index a4ae6b9e99..2a7c8f472a 100644
+--- a/python/modules/rmp.py
++++ b/python/modules/rmp.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# rmp has its own extension module rather than living in openroadpy.
+-from src.rmp.rmp_py import *
++from openroadpy import *
+diff --git a/python/modules/rsz.py b/python/modules/rsz.py
+index 5b94f2a246..2a7c8f472a 100644
+--- a/python/modules/rsz.py
++++ b/python/modules/rsz.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The rsz commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/stt.py b/python/modules/stt.py
+index bfc87ea268..2a7c8f472a 100644
+--- a/python/modules/stt.py
++++ b/python/modules/stt.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The stt commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/tap.py b/python/modules/tap.py
+index 284074a78b..2a7c8f472a 100644
+--- a/python/modules/tap.py
++++ b/python/modules/tap.py
+@@ -1,5 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# The tap commands live in the combined openroadpy module.
+ from openroadpy import *
+diff --git a/python/modules/utl.py b/python/modules/utl.py
+index fe5bbdc10c..2a7c8f472a 100644
+--- a/python/modules/utl.py
++++ b/python/modules/utl.py
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from src.utl.utl import *
++from openroadpy import *
+diff --git a/python/modules/wmk.py b/python/modules/wmk.py
+index de781b2599..c72547ef1a 100644
+--- a/python/modules/wmk.py
++++ b/python/modules/wmk.py
+@@ -1,4 +1,8 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-from src.wmk.wmk import *
++from openroadpy import *
++
++# openroadpy is one namespace, where CtsOptions is the cts class; the
++# watermark options are renamed there.
++from openroadpy import WatermarkCtsOptions as CtsOptions
+diff --git a/python/openroad/BUILD b/python/openroad/BUILD
+index 1c14dd8689..fe3fc89b25 100644
+--- a/python/openroad/BUILD
++++ b/python/openroad/BUILD
+@@ -19,10 +19,6 @@ py_library(
+     deps = [
+         "//:openroad_py",
+         "//python/modules",
+-        "//src/odb:odb_py",
+-        "//src/rmp:rmp_py",
+-        "//src/utl:utl_py",
+-        "//src/wmk:wmk_py",
+     ],
+ )
+ 
+diff --git a/src/OpenRoad-py.i b/src/OpenRoad-py.i
+index 0dd45553d2..b25dc92377 100644
+--- a/src/OpenRoad-py.i
++++ b/src/OpenRoad-py.i
+@@ -119,3 +119,16 @@ namespace ord {
+ }
+ 
+ %}
++
++// odb, utl and rmp are separate extension modules that other extensions
++// import, so they cannot be compiled in here.  Re-export them so
++// `from openroadpy import *` is the whole API.  Each module defines its own
++// SwigPyIterator; keep this one.
++%pythoncode %{
++_openroadpy_iterator = SwigPyIterator
++from src.odb.odb import *
++from src.utl.utl import *
++from src.rmp.rmp_py import *
++SwigPyIterator = _openroadpy_iterator
++del _openroadpy_iterator
++%}
+diff --git a/src/gpl/BUILD b/src/gpl/BUILD
+index 4cbb43b157..e064015c01 100644
+--- a/src/gpl/BUILD
++++ b/src/gpl/BUILD
+@@ -1,10 +1,8 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2025, The OpenROAD Authors
+ 
+-load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("@rules_python//python:defs.bzl", "py_library")
+-load("//bazel:python_wrap_cc.bzl", "PYTHON_EXTENSION_LINKOPTS", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
++load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+ load("//bazel/gpu:copts.bzl", "CUDA_COPTS")
+@@ -245,37 +243,6 @@ cc_library(
+ 
+ # This target compiles the SWIG C++ wrapper into a shared library (.so)
+ # that Python can load dynamically.
+-cc_binary(
+-    name = "_gpl.so",
+-    srcs = [
+-        ":swig-py",
+-    ],
+-    defines = [PYTHON_STABLE_API_DEFINE],
+-    includes = ["src"],
+-    linkopts = PYTHON_EXTENSION_LINKOPTS,
+-    linkshared = True,
+-    deps = [
+-        "//src/gpl",
+-        "//src/odb/src/db",
+-        "//src/utl",
+-        "@boost.stacktrace",
+-        "@rules_python//python/cc:current_py_cc_headers",
+-    ],
+-)
+-
+-# This packages the SWIG-generated Python wrapper (gpl.py) and the
+-# compiled C++ extension (_gpl.so) together.
+-py_library(
+-    name = "gpl_py",
+-    srcs = [":swig-py"],  # Use the .py output from the swig-py rule
+-    # The data attribute makes the .so file available at runtime.
+-    data = [":_gpl.so"],
+-    # Imported as src.gpl.gpl; //python/modules provides the
+-    # top-level name, so this directory stays off sys.path and the module
+-    # is loaded once.
+-    visibility = ["//visibility:public"],
+-)
+-
+ tcl_encode(
+     name = "tcl",
+     srcs = [
+diff --git a/src/wmk/BUILD b/src/wmk/BUILD
+index a2b602706c..69f6bcbee5 100644
+--- a/src/wmk/BUILD
++++ b/src/wmk/BUILD
+@@ -2,7 +2,6 @@
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("@rules_python//python:defs.bzl", "py_library")
+ load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
+ load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+ load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+@@ -224,12 +223,3 @@ messages_txt(
+ # Keep timing-dependent bindings in _openroadpy.so. A separate WMK extension
+ # would link another copy of OpenSTA's singleton state (such as port directions)
+ # and interpret the Design's Liberty objects using that uninitialized copy.
+-py_library(
+-    name = "wmk_py",
+-    srcs = ["wmk.py"],
+-    # Imported as src.wmk.wmk; //python/modules provides the top-level
+-    # name, so this directory stays off sys.path and the module is loaded
+-    # once.
+-    visibility = ["//visibility:public"],
+-    deps = ["//:openroad_py"],
+-)
+diff --git a/src/wmk/wmk.py b/src/wmk/wmk.py
+deleted file mode 100644
+index 65a2406606..0000000000
+--- a/src/wmk/wmk.py
++++ /dev/null
+@@ -1,8 +0,0 @@
+-# SPDX-License-Identifier: BSD-3-Clause
+-# Copyright (c) 2026, The OpenROAD Authors
+-
+-# Bazel exports WMK through the same extension as Design and its STA state.
+-from openroadpy import PlacementOptions, RoutingStat, VerifyResult, Watermark
+-from openroadpy import WatermarkCtsOptions as CtsOptions
+-
+-__all__ = ["CtsOptions", "PlacementOptions", "RoutingStat", "VerifyResult", "Watermark"]
+-- 
+2.54.0
+

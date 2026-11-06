@@ -1,0 +1,83 @@
+From fbf6d92918568fa355516b17b4e096d68793b440 Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Mon, 12 Oct 2026 03:16:47 +0000
+Subject: [PATCH 12/13] python: load only OpenROAD's own extension names from
+ _openroad.so
+
+The finder matched the last component of any module name, so after
+`import openroad` another package's _ant_py (or a top-level one) would be
+loaded from _openroad.so. Match the exact names the generated wrappers
+import: _ord_py and src.<tool>._<tool>_py.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ python/modules/_openroad_loader.py | 15 +++++++++------
+ python/openroad/modules_test.py    | 11 ++++++++++-
+ 2 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/python/modules/_openroad_loader.py b/python/modules/_openroad_loader.py
+index 69c5ab2bf8..76c186b4a9 100644
+--- a/python/modules/_openroad_loader.py
++++ b/python/modules/_openroad_loader.py
+@@ -16,12 +16,15 @@ import importlib.util
+ import os
+ import sys
+ 
+-# The modules in _openroad.so. Each one's extension is named _<module>_py.
+-_MODULES = """
+-    ord ant cgt cts dpl drt exa fin gpl grt ifp odb
+-    par pdn ppl psm rcx rmp rsz stt tap utl wmk
++# The tool modules in _openroad.so. Each SWIG wrapper src/<tool>/<tool>_py.py
++# imports its extension as src.<tool>._<tool>_py; ord_py.py, at the top
++# level, imports _ord_py. Only these exact names are loaded from the library,
++# so a module of the same name in another package is left alone.
++_TOOLS = """
++    ant cgt cts dpl drt exa fin gpl grt ifp odb par
++    pdn ppl psm rcx rmp rsz stt tap utl wmk
+ """.split()
+-_EXTENSIONS = frozenset(f"_{module}_py" for module in _MODULES)
++EXTENSIONS = frozenset(["_ord_py"] + [f"src.{tool}._{tool}_py" for tool in _TOOLS])
+ 
+ 
+ def _find_library():
+@@ -39,7 +42,7 @@ LIBRARY = _find_library()
+ 
+ class _OpenRoadFinder(importlib.abc.MetaPathFinder):
+     def find_spec(self, fullname, path, target=None):
+-        if fullname.rpartition(".")[2] not in _EXTENSIONS:
++        if fullname not in EXTENSIONS:
+             return None
+         loader = importlib.machinery.ExtensionFileLoader(fullname, LIBRARY)
+         return importlib.util.spec_from_file_location(fullname, LIBRARY, loader=loader)
+diff --git a/python/openroad/modules_test.py b/python/openroad/modules_test.py
+index cd4bdfcf2c..6b99b9679e 100644
+--- a/python/openroad/modules_test.py
++++ b/python/openroad/modules_test.py
+@@ -25,7 +25,7 @@ class ModulesTest(unittest.TestCase):
+         extensions = [
+             module
+             for name, module in list(sys.modules.items())
+-            if name.rpartition(".")[2] in _openroad_loader._EXTENSIONS
++            if name in _openroad_loader.EXTENSIONS
+         ]
+         self.assertGreaterEqual(len(extensions), 6)
+         self.assertEqual(
+@@ -39,6 +39,15 @@ class ModulesTest(unittest.TestCase):
+             }
+         self.assertEqual(libraries, {"_openroad.so"})
+ 
++    def test_finder_only_claims_openroad_modules(self):
++        finder = next(f for f in sys.meta_path if type(f).__name__ == "_OpenRoadFinder")
++        self.assertIsNotNone(finder.find_spec("src.ant._ant_py", None))
++        self.assertIsNotNone(finder.find_spec("_ord_py", None))
++        # Same final name in another package, or at the top level.
++        self.assertIsNone(finder.find_spec("other._ant_py", None))
++        self.assertIsNone(finder.find_spec("_ant_py", None))
++        self.assertIsNone(finder.find_spec("other._ord_py", None))
++
+     def test_tools_have_their_own_namespaces(self):
+         self.assertTrue(hasattr(ant, "AntennaChecker"))
+         self.assertFalse(hasattr(ant, "Tech"))
+-- 
+2.54.0
+

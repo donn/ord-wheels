@@ -1,0 +1,78 @@
+From 56439c3d02240ac65621481fed2de0eee7e75769 Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Sun, 11 Oct 2026 15:55:37 +0000
+Subject: [PATCH 07/13] python: import rmp from its own extension, without a
+ fallback
+
+rmp.py fell back to openroadpy when rmp_py was missing, but openroadpy has
+no rmp API, so in the wheel (which did not ship rmp_py) `import rmp`
+succeeded with none of rmp's classes. Re-export src.rmp.rmp_py like the
+other modules, ship it through openroadpy, and keep src/rmp off sys.path.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ python/modules/rmp.py         | 8 ++------
+ python/openroad/BUILD         | 1 +
+ python/openroad/wheel_test.py | 2 ++
+ src/rmp/BUILD                 | 4 +++-
+ 4 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/python/modules/rmp.py b/python/modules/rmp.py
+index 5d00e26506..a4ae6b9e99 100644
+--- a/python/modules/rmp.py
++++ b/python/modules/rmp.py
+@@ -1,9 +1,5 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ # Copyright (c) 2026, The OpenROAD Authors
+ 
+-# rmp has its own extension when it is built; otherwise its commands are in
+-# the combined openroadpy module.
+-try:
+-    from rmp_py import *
+-except ImportError:
+-    from openroadpy import *
++# rmp has its own extension module rather than living in openroadpy.
++from src.rmp.rmp_py import *
+diff --git a/python/openroad/BUILD b/python/openroad/BUILD
+index 23c1329799..1c14dd8689 100644
+--- a/python/openroad/BUILD
++++ b/python/openroad/BUILD
+@@ -20,6 +20,7 @@ py_library(
+         "//:openroad_py",
+         "//python/modules",
+         "//src/odb:odb_py",
++        "//src/rmp:rmp_py",
+         "//src/utl:utl_py",
+         "//src/wmk:wmk_py",
+     ],
+diff --git a/python/openroad/wheel_test.py b/python/openroad/wheel_test.py
+index 4338f0dc44..7880227c35 100644
+--- a/python/openroad/wheel_test.py
++++ b/python/openroad/wheel_test.py
+@@ -25,6 +25,8 @@ tech = Tech()
+ assert odb.dbDatabase is not None
+ assert hasattr(ant, "AntennaChecker")
+ assert hasattr(wmk, "Watermark")
++import rmp
++assert hasattr(rmp, "Blif")
+ assert isinstance(utl.ANT, int)
+ print("imported", openroad.__file__)
+ """
+diff --git a/src/rmp/BUILD b/src/rmp/BUILD
+index 62352e31a2..fd5481c8af 100644
+--- a/src/rmp/BUILD
++++ b/src/rmp/BUILD
+@@ -151,7 +151,9 @@ py_library(
+     name = "rmp_py",
+     srcs = [":swig-py"],
+     data = [":_rmp_py.so"],
+-    imports = ["."],
++    # Imported as src.rmp.rmp_py; //python/modules provides the top-level
++    # name, so this directory stays off sys.path and the module is loaded
++    # once.
+     visibility = ["//visibility:public"],
+ )
+ 
+-- 
+2.54.0
+

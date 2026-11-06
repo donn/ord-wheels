@@ -97,7 +97,7 @@ def build(git_repo):
         cwd=git_repo,
     )
 
-    for patch in sorted((__repo_root__ / "patches").glob(".patch")):
+    for patch in sorted((__repo_root__ / "patches").glob("*.patch")):
         subprocess.check_call(
             ["git", "apply", str(patch)],
             encoding="utf8",

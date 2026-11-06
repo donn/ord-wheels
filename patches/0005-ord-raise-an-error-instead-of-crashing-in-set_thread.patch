@@ -1,0 +1,86 @@
+From 5a64ad9e1b80a8a729ee1deb4a4227c126b5b6ce Mon Sep 17 00:00:00 2001
+From: Matt Liberty <mliberty@precisioninno.com>
+Date: Sun, 11 Oct 2026 15:23:27 +0000
+Subject: [PATCH 05/13] ord: raise an error instead of crashing in
+ set_thread_count without a Tech
+
+From Python, set_thread_count() and thread_count() act on the OpenRoad
+instance owned by the current Tech. When none is alive (never created, or
+already garbage collected) they dereferenced a null pointer. Raise ORD-0105
+instead; Tcl always has an instance and is unaffected.
+
+Signed-off-by: Matt Liberty <mliberty@precisioninno.com>
+---
+ python/openroad/openroad_test.py |  9 +++++++++
+ src/OpenRoad.i                   | 22 ++++++++++++++++------
+ 2 files changed, 25 insertions(+), 6 deletions(-)
+
+diff --git a/python/openroad/openroad_test.py b/python/openroad/openroad_test.py
+index 7835638983..01834bb278 100644
+--- a/python/openroad/openroad_test.py
++++ b/python/openroad/openroad_test.py
+@@ -20,6 +20,15 @@ class OpenRoadApiTest(unittest.TestCase):
+         set_thread_count(1)
+         self.assertEqual(thread_count(), 1)
+ 
++    def test_thread_count_without_tech(self):
++        # A Tech that has been garbage collected no longer owns an
++        # OpenRoad instance.
++        Tech()
++        with self.assertRaisesRegex(RuntimeError, "ORD-0105"):
++            set_thread_count(2)
++        with self.assertRaisesRegex(RuntimeError, "ORD-0105"):
++            thread_count()
++
+     def test_tech_has_database(self):
+         tech = Tech()
+         self.assertIsInstance(tech.getDB(), odb.dbDatabase)
+diff --git a/src/OpenRoad.i b/src/OpenRoad.i
+index 7e27e65c98..ae3b02dda2 100644
+--- a/src/OpenRoad.i
++++ b/src/OpenRoad.i
+@@ -591,25 +591,35 @@ units_initialized()
+ 
+ namespace ord {
+ 
++// The thread count belongs to the current OpenRoad instance.  From Python
++// that is the one owned by the most recent live Tech, and there may be none.
++static OpenRoad *
++threadCountOwner()
++{
++  OpenRoad *ord = getOpenRoad();
++  if (ord == nullptr) {
++    utl::Logger::defaultLogger()->error(
++        utl::ORD, 105, "No OpenROAD instance exists; create a Tech first.");
++  }
++  return ord;
++}
++
+ void
+ set_thread_count(int threads)
+ {
+-  OpenRoad *ord = getOpenRoad();
+-  ord->setThreadCount(threads);
++  threadCountOwner()->setThreadCount(threads);
+ }
+ 
+ void
+ set_thread_count(const char* threads)
+ {
+-  OpenRoad *ord = getOpenRoad();
+-  ord->setThreadCount(threads);
++  threadCountOwner()->setThreadCount(threads);
+ }
+ 
+ int
+ thread_count()
+ {
+-  OpenRoad *ord = getOpenRoad();
+-  return ord->getThreadCount();
++  return threadCountOwner()->getThreadCount();
+ }
+ 
+ int
+-- 
+2.54.0
+
