@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
           repository: The-OpenROAD-Project/OpenROAD
           submodules: recursive
-          ref: ${{ get_openroad_rev.outputs.rev }}
+          ref: ${{ steps.get_openroad_rev.outputs.rev }}
           path: openroad-repo
       - uses: actions/setup-python@v7
         with:
